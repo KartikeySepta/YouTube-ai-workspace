@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+venv/
+.venv/
+
+# Environment
+.env
+
+# Temporary files
+temp_stream*
+*.mp3
+
+# Output
+*.json
+output/
+
+# macOS
+.DS_Store
