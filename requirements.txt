@@ -1,3 +1,5 @@
 yt-dlp>=2026.6.9
 faster-whisper>=1.2.1
 google-genai>=2.10.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
