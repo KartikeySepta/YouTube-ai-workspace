@@ -85,16 +85,21 @@ CLAIMS:
 
 
 def call_gemini(prompt: str) -> str:
-    """Same Gemini call pattern as Step 3. Requires GEMINI_API_KEY in .env."""
-    import google.generativeai as genai
+    """Uses google-genai — the current SDK (google-generativeai is deprecated as of 2026)."""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    from google import genai
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(prompt)
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
     return response.text
 
 
