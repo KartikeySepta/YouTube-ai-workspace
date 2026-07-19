@@ -61,6 +61,25 @@ class Claim:
     stance: str         # "support" | "oppose" | "neutral" | "mixed"
     evidence: list       # list[EvidenceRef]
     topics: list = field(default_factory=list)
+    cluster_id: Optional[str] = None   # set by Step 11 (claim_clusterer.py)
+
+
+@dataclass
+class ClusterSynthesis:
+    """
+    One cluster's synthesis result — always backed by real claim_ids, never invented.
+    relationship is one of: "single_source" | "agreement" | "partial_agreement" |
+    "contradiction" | "different_context" | "independent"
+    """
+    cluster_id: str
+    member_claim_ids: list
+    member_video_ids: list
+    unique_channels: int
+    supporting_count: int    # derived from claim.stance == "support", NOT an LLM confidence score
+    contradicting_count: int  # derived from claim.stance == "oppose"
+    neutral_count: int
+    relationship: str
+    synthesis_note: Optional[str] = None   # only set for multi-video clusters, via Gemini + validation
 
 
 @dataclass
