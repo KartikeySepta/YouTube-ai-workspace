@@ -1,0 +1,267 @@
+{
+  "per_question": [
+    {
+      "question": "How did the speaker go from being a gifted child with a bright future to a life of constant failure?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0000",
+        "JiwZQNYlGQI_c0002",
+        "JiwZQNYlGQI_c0003"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0014",
+        "JiwZQNYlGQI_c0003",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0000"
+      ],
+      "reciprocal_rank": 0.3333333333333333,
+      "hit@1": false,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "What realization finally changed everything for her?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0011",
+        "JiwZQNYlGQI_c0012"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0006",
+        "JiwZQNYlGQI_c0002",
+        "JiwZQNYlGQI_c0003",
+        "JiwZQNYlGQI_c0005"
+      ],
+      "reciprocal_rank": 0.0,
+      "hit@1": false,
+      "hit@3": false,
+      "hit@5": false
+    },
+    {
+      "question": "Why did she start her YouTube channel about this condition?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0005"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0005",
+        "JiwZQNYlGQI_c0013",
+        "JiwZQNYlGQI_c0004",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0009"
+      ],
+      "reciprocal_rank": 1.0,
+      "hit@1": true,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "What role did getting a diagnosis play in her story?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0001"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0001",
+        "mv-BME1SmTA_c0002",
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0009",
+        "JiwZQNYlGQI_c0007"
+      ],
+      "reciprocal_rank": 1.0,
+      "hit@1": true,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "Is this condition something a person simply grows out of once they become an adult?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0007"
+      ],
+      "retrieved_top5": [
+        "mv-BME1SmTA_c0000",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0004",
+        "mv-BME1SmTA_c0001"
+      ],
+      "reciprocal_rank": 0.5,
+      "hit@1": false,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "Does she frame the condition as purely a disadvantage, or does she describe upsides too?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0012"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0009",
+        "JiwZQNYlGQI_c0001",
+        "mv-BME1SmTA_c0000"
+      ],
+      "reciprocal_rank": 0.0,
+      "hit@1": false,
+      "hit@3": false,
+      "hit@5": false
+    },
+    {
+      "question": "What message does she offer to people who don't have the condition themselves?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0016"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0016",
+        "mv-BME1SmTA_c0002",
+        "mv-BME1SmTA_c0000",
+        "JiwZQNYlGQI_c0009"
+      ],
+      "reciprocal_rank": 0.5,
+      "hit@1": false,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "How does she describe eventually becoming successful and reaching her potential?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0013",
+        "JiwZQNYlGQI_c0014"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0014",
+        "JiwZQNYlGQI_c0015",
+        "JiwZQNYlGQI_c0006",
+        "JiwZQNYlGQI_c0003",
+        "JiwZQNYlGQI_c0004"
+      ],
+      "reciprocal_rank": 1.0,
+      "hit@1": true,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "Which broad areas of her adult life were disrupted before she understood her brain?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0002",
+        "JiwZQNYlGQI_c0003"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0004",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0000",
+        "JiwZQNYlGQI_c0011",
+        "JiwZQNYlGQI_c0006"
+      ],
+      "reciprocal_rank": 0.0,
+      "hit@1": false,
+      "hit@3": false,
+      "hit@5": false
+    },
+    {
+      "question": "What is the core reassurance she wants people struggling with this to remember?",
+      "category": "description_sourced",
+      "expected": [
+        "JiwZQNYlGQI_c0011",
+        "JiwZQNYlGQI_c0016"
+      ],
+      "retrieved_top5": [
+        "mv-BME1SmTA_c0002",
+        "JiwZQNYlGQI_c0015",
+        "JiwZQNYlGQI_c0012",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0013"
+      ],
+      "reciprocal_rank": 0.16666666666666666,
+      "hit@1": false,
+      "hit@3": false,
+      "hit@5": false
+    },
+    {
+      "question": "Do only children have ADHD, or can adults have it as well?",
+      "category": "description_sourced_v2",
+      "expected": [
+        "mv-BME1SmTA_c0000"
+      ],
+      "retrieved_top5": [
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0008",
+        "mv-BME1SmTA_c0000",
+        "JiwZQNYlGQI_c0004",
+        "JiwZQNYlGQI_c0015"
+      ],
+      "reciprocal_rank": 0.3333333333333333,
+      "hit@1": false,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "How common is ADHD among adults, and how many of them go undiagnosed?",
+      "category": "description_sourced_v2",
+      "expected": [
+        "mv-BME1SmTA_c0000"
+      ],
+      "retrieved_top5": [
+        "mv-BME1SmTA_c0000",
+        "JiwZQNYlGQI_c0007",
+        "JiwZQNYlGQI_c0008",
+        "JiwZQNYlGQI_c0006",
+        "JiwZQNYlGQI_c0001"
+      ],
+      "reciprocal_rank": 1.0,
+      "hit@1": true,
+      "hit@3": true,
+      "hit@5": true
+    },
+    {
+      "question": "What symptoms does the psychiatrist point to when identifying adult ADHD?",
+      "category": "description_sourced_v2",
+      "expected": [
+        "mv-BME1SmTA_c0002"
+      ],
+      "retrieved_top5": [
+        "mv-BME1SmTA_c0000",
+        "JiwZQNYlGQI_c0008",
+        "mv-BME1SmTA_c0001",
+        "JiwZQNYlGQI_c0009",
+        "JiwZQNYlGQI_c0007"
+      ],
+      "reciprocal_rank": 0.0,
+      "hit@1": false,
+      "hit@3": false,
+      "hit@5": false
+    }
+  ],
+  "aggregate": {
+    "hit_rate@1": 0.3076923076923077,
+    "hit_rate@3": 0.6153846153846154,
+    "hit_rate@5": 0.6153846153846154,
+    "mean_reciprocal_rank": 0.4487179487179487,
+    "n": 13
+  },
+  "by_category": {
+    "description_sourced_v2": {
+      "hit_rate@1": 0.3333333333333333,
+      "hit_rate@3": 0.6666666666666666,
+      "hit_rate@5": 0.6666666666666666,
+      "mean_reciprocal_rank": 0.4444444444444444,
+      "n": 3
+    },
+    "description_sourced": {
+      "hit_rate@1": 0.3,
+      "hit_rate@3": 0.6,
+      "hit_rate@5": 0.6,
+      "mean_reciprocal_rank": 0.45,
+      "n": 10
+    }
+  }
+}

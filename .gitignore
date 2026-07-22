@@ -15,12 +15,18 @@ venv/
 temp_stream*
 *.mp3
 
-# Output
-*.json
-output/
+# Scraper output (regenerable)
+scraper/data.json
+scraper/*.mp3
+
+# RAG generated data
+rag/data/workspaces/
+rag/data/raw/
+rag/data/qdrant_db/
 
 # macOS
 .DS_Store
 
 # Personal docs (local only)
 abhishek.md
+test.md

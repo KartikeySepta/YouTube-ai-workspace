@@ -45,7 +45,7 @@ def generate_content(prompt: str, model: str | None = None) -> str:
     Non-429 errors are raised immediately (no point retrying a bad request).
     """
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
     from google import genai
     from google.genai import errors
 

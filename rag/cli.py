@@ -318,7 +318,7 @@ def cmd_add(args):
     import tempfile
     import os
 
-    scraper = Path(__file__).resolve().parent.parent / "youtube.py"
+    scraper = Path(__file__).resolve().parent.parent / "scraper" / "youtube.py"
     if not scraper.exists():
         print(f"ERROR: scraper not found at {scraper}")
         return

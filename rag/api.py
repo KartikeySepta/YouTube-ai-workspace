@@ -115,7 +115,7 @@ def workspace_detail(workspace_id: str):
 @app.post("/add")
 def add_video(req: AddVideoRequest):
     """Scrape a YouTube video and run the full pipeline (ingest → report)."""
-    scraper = Path(__file__).resolve().parent.parent / "youtube.py"
+    scraper = Path(__file__).resolve().parent.parent / "scraper" / "youtube.py"
     if not scraper.exists():
         raise HTTPException(500, "Scraper (youtube.py) not found at repo root")
 

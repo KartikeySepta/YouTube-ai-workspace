@@ -1,186 +1,108 @@
-# YouTube Transcript Scraper
+# YouTube AI Workspace
 
-YouTube Transcript Scraper is a Python CLI for downloading YouTube audio, extracting video metadata, and generating timestamped transcripts. It supports local transcription with Faster Whisper and optional cloud transcription with Google Gemini, then exports clean structured JSON for search, research, content analysis, datasets, and automation workflows.
+An end-to-end system for turning YouTube videos into structured, cited research.  
+Two modules, one shared `.env`:
 
-## SEO Keywords
-
-YouTube transcript scraper, YouTube transcription tool, YouTube audio downloader, YouTube metadata extractor, Python YouTube scraper, yt-dlp transcript CLI, Faster Whisper YouTube transcription, Gemini transcription CLI, video transcript dataset, YouTube transcript JSON exporter.
-
-## Features
-
-- Extracts YouTube audio with `yt-dlp`
-- Converts audio to MP3 through FFmpeg
-- Captures rich video metadata including title, channel, duration, views, likes, comments, tags, categories, thumbnail, language, upload date, and description
-- Generates timestamped transcripts locally with `faster-whisper`
-- Supports GPU acceleration with CUDA and falls back to CPU when needed
-- Optional Google Gemini cloud transcription mode
-- Prints structured JSON or appends results to an output JSON file
-- Designed for research, SEO analysis, video indexing, content repurposing, and dataset creation
-
-## Project Structure
-
-```text
-youtube-scrap/
-├── youtube.py          # Main CLI pipeline
-├── test_audio.py       # Audio extraction test script
-├── test_gpu.py         # GPU / Whisper environment test script
-├── test_meta.py        # Metadata extraction test script
-├── test_pipeline.py    # End-to-end pipeline test script
-├── .gitignore          # Git ignore rules for envs, cache, audio, and output data
-└── README.md           # Project documentation
+```
+YouTube-ai-workspace/
+├── scraper/              # TRANSCRIPTION — extract audio + metadata + transcript
+│   ├── youtube.py        #   Main CLI: URL → audio → transcript → JSON
+│   ├── api.py            #   FastAPI wrapper for the scraper
+│   ├── requirements.txt  #   yt-dlp, faster-whisper, google-genai, fastapi, uvicorn
+│   ├── test_*.py         #   Component tests (audio, GPU, metadata, pipeline)
+│   └── data.json         #   Sample scraped output
+│
+├── rag/                  # RESEARCH ENGINE — evidence-first multi-video RAG
+│   ├── cli.py            #   Main CLI (12 commands: add, batch, ingest, index,
+│   │                     #     extract-claims, cluster, synthesize, report,
+│   │                     #     chat, talk, status, evaluate)
+│   ├── api.py            #   FastAPI endpoints (POST /add, /chat, GET /report, etc.)
+│   ├── core/             #   Config, Gemini wrapper (429 retry), data models
+│   ├── ingestion/        #   Parse + chunk transcripts
+│   ├── retrieval/        #   Embed, vector store, BM25, hybrid fusion, reranker
+│   ├── knowledge/        #   Claim extraction, clustering, synthesis, themes
+│   ├── chat/             #   Grounded Q&A with citation verification
+│   ├── evals/            #   Retrieval evaluation harness + dataset
+│   ├── data/             #   Workspaces (generated, gitignored)
+│   ├── requirements.txt  #   sentence-transformers, qdrant-client, rank-bm25, etc.
+│   └── README.md         #   Detailed RAG usage docs
+│
+├── .env                  # GEMINI_API_KEY (shared by both modules)
+├── .gitignore
+└── README.md             # ← you are here
 ```
 
-## Requirements
-
-- Python 3.10+
-- FFmpeg installed and available on your PATH
-- A working internet connection for downloading YouTube media
-- Optional NVIDIA GPU with CUDA for faster local transcription
-- Optional Google AI Studio API key for Gemini cloud transcription
-
-## Installation
-
-Clone the repository and create a virtual environment:
+## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/youtube-scrap.git
-cd youtube-scrap
-python3 -m venv venv
-source venv/bin/activate
+# 1. Clone
+git clone git@github.com:KartikeySepta/YouTube-ai-workspace.git
+cd YouTube-ai-workspace
+
+# 2. Setup
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r scraper/requirements.txt
+pip install -r rag/requirements.txt
+echo "GEMINI_API_KEY=your_key_here" > .env
+
+# 3. Add a video (one command does everything)
+cd rag
+python3 cli.py add "https://www.youtube.com/watch?v=VIDEO_ID" my_research
+
+# 4. Use it
+python3 cli.py talk my_research          # Interactive cited Q&A
+python3 cli.py report my_research        # Generate research brief
+cat data/workspaces/my_research/report.md
 ```
 
-Install the Python packages:
+## Add Multiple Videos at Once
 
 ```bash
-pip install -r requirements.txt
+# Create a URL file
+cat > urls.txt << EOF
+https://www.youtube.com/watch?v=abc123
+https://www.youtube.com/watch?v=def456
+https://www.youtube.com/watch?v=ghi789
+EOF
+
+# Batch process
+cd rag
+python3 cli.py batch urls.txt my_research
 ```
 
-Install FFmpeg if you do not already have it:
+## Run as a Web API
 
 ```bash
-sudo apt install ffmpeg
+# RAG API (for frontend)
+cd rag && uvicorn api:app --reload --port 8000
+# Docs: http://localhost:8000/docs
+
+# Scraper API (standalone transcription)
+cd scraper && uvicorn api:app --reload --port 8001
 ```
 
-On macOS with Homebrew:
+## How It Works
 
-```bash
-brew install ffmpeg
+```
+YouTube URL
+     │
+     ▼
+┌─────────────┐     ┌─────────────────────────────────────────────┐
+│   SCRAPER   │     │              RAG ENGINE                      │
+│             │     │                                              │
+│ yt-dlp      │     │  ingest → chunk → embed → index             │
+│ + Gemini/   │────▶│  extract-claims → cluster → synthesize      │
+│   Whisper   │     │  ────────────────────────────────────────    │
+│             │     │  chat: retrieve → rerank → Gemini → verify  │
+│ → output.json     │  report: cited Markdown brief                │
+└─────────────┘     └─────────────────────────────────────────────┘
 ```
 
-## Usage
+## What Makes This Different
 
-Run local transcription with the default `small` Whisper model:
-
-```bash
-python youtube.py "https://www.youtube.com/watch?v=VIDEO_ID"
-```
-
-Save or append the result to a JSON file:
-
-```bash
-python youtube.py "https://www.youtube.com/watch?v=VIDEO_ID" --output final_data.json
-```
-
-Use a smaller local model:
-
-```bash
-python youtube.py "https://www.youtube.com/watch?v=VIDEO_ID" --engine local --model base
-```
-
-Use Gemini cloud transcription:
-
-```bash
-python youtube.py "https://www.youtube.com/watch?v=VIDEO_ID" --engine cloud --output final_data.json
-```
-
-Before using cloud mode, replace `GEMINI_API_KEY` in `youtube.py` with your Google AI Studio API key.
-
-## JSON Output
-
-The CLI exports a payload like this:
-
-```json
-{
-    "metadata": {
-        "video_id": "VIDEO_ID",
-        "title": "Video title",
-        "channel": "Channel name",
-        "channel_url": "https://www.youtube.com/@channel",
-        "subscriber_count": 100000,
-        "duration_seconds": 600,
-        "view_count": 250000,
-        "like_count": 12000,
-        "comment_count": 500,
-        "upload_date": "20260702",
-        "tags": ["youtube", "transcript"],
-        "categories": ["Education"],
-        "thumbnail_url": "https://...",
-        "is_live": false,
-        "language": "en",
-        "description": "Video description"
-    },
-    "transcript": "[00:00] Transcript text starts here..."
-}
-```
-
-When `--output` points to an existing JSON file, the script loads the current data, converts it to a list if needed, appends the new result, and writes the updated list back to disk.
-
-## Common Use Cases
-
-- Build searchable YouTube transcript datasets
-- Extract video metadata for SEO research
-- Generate transcripts for content repurposing
-- Analyze podcasts, lectures, tutorials, interviews, and long-form videos
-- Create JSON records for RAG, search indexes, dashboards, or data pipelines
-
-## GitHub Topics
-
-Suggested repository topics:
-
-```text
-youtube-scraper, youtube-transcript, transcription, speech-to-text, yt-dlp, faster-whisper, whisper, gemini-api, metadata-extraction, python-cli, video-analysis, seo-tools
-```
-
-## Contributing
-
-Contributions are welcome. Good first improvements include adding a `requirements.txt`, moving secrets to environment variables, improving error handling, adding automated tests, supporting more Whisper model sizes, and improving output formats.
-
-To contribute:
-
-1. Fork the repository
-2. Create a feature branch
-
-```bash
-git checkout -b feature/your-feature-name
-```
-
-3. Make your changes
-4. Run a basic syntax check
-
-```bash
-python3 -m py_compile youtube.py
-```
-
-5. Commit your work
-
-```bash
-git add .
-git commit -m "Add your change summary"
-```
-
-6. Open a pull request with a clear description of what changed and why
-
-## Development Notes
-
-- Do not commit API keys, local virtual environments, generated MP3 files, or large transcript datasets
-- Keep generated JSON output out of Git unless it is small sample data
-- Prefer focused pull requests that solve one problem at a time
-- Test both local and cloud transcription paths when touching shared pipeline logic
-
-## Responsible Use
-
-Use this tool only for videos you are allowed to process. Respect YouTube's Terms of Service, creator rights, copyright rules, and privacy expectations.
-
-## License
-
-No license has been added yet. Add a license before publishing if you want others to use, modify, or distribute the project.
+- **Every claim is evidence-backed** — hallucinated chunk_ids are discarded
+- **Every citation is verified** — grouped `[Source 1, Source 2]` all checked
+- **Cross-video synthesis** — surfaces agreement/disagreement across creators
+- **Scope-aware** — "same stat for different countries" is flagged, not collapsed
+- **Cost-controlled** — claims cached by content_hash; re-runs don't re-call Gemini
+- **Rate-limit resilient** — centralized 429 retry with exponential backoff
