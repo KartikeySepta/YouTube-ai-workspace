@@ -261,7 +261,7 @@ def cmd_chat(args):
     from chat.engine import ask
 
     history = _load_messages(args.workspace_id)
-    recent = [{"role": m["role"], "content": m["content"]} for m in history[-4:]]
+    recent = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
     result = ask(args.question, workspace_id=args.workspace_id, recent_history=recent, mode=args.mode)
     print(f"\n[{args.mode} mode] Answer:\n{result['answer']}\n")
     if args.mode == "grounded":
@@ -312,7 +312,7 @@ def cmd_talk(args):
         if not question:
             continue
 
-        recent = [{"role": m["role"], "content": m["content"]} for m in history[-4:]]
+        recent = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
         result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
         print(f"\nAssistant: {result['answer']}\n")
 

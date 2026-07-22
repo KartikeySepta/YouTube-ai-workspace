@@ -43,7 +43,7 @@ def build_grounded_prompt(question: str, context_text: str, recent_history: list
     """
     history_block = ""
     if recent_history:
-        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-4:]]
+        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-12:]]
         history_block = "Recent conversation (for context only, NOT evidence):\n" + "\n".join(history_lines) + "\n\n"
 
     return f"""You are answering questions using ONLY the sources below. These sources are excerpts
@@ -76,7 +76,7 @@ def build_assist_prompt(question: str, context_text: str, recent_history: list[d
     """
     history_block = ""
     if recent_history:
-        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-4:]]
+        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-12:]]
         history_block = "Recent conversation:\n" + "\n".join(history_lines) + "\n\n"
 
     return f"""You are an expert assistant helping the user ACT on what a set of YouTube videos teach.
