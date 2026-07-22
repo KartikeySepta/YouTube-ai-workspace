@@ -1,5 +1,18 @@
+# Scraper — runtime dependencies
+# Install with: pip install -r requirements.txt
+
+# YouTube download + audio extraction
 yt-dlp>=2026.6.9
+
+# Local transcription (GPU or CPU fallback)
 faster-whisper>=1.2.1
-google-genai>=2.10.0
+
+# Cloud transcription (Gemini)
+google-genai>=0.3.0
+
+# .env loading for GEMINI_API_KEY
+python-dotenv>=1.0.0
+
+# FastAPI wrapper (optional, for running as a service)
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
