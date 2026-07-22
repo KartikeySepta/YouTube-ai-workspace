@@ -1,14 +1,21 @@
 """
-Centralized LLM call with a swappable backend (Gemini or local Ollama) + 429 backoff.
+Centralized LLM call with multiple swappable backends + automatic fallback.
 
 Every LLM caller in the project (claim_extractor, engine, synthesizer, claim_clusterer)
-goes through here, so backend choice and rate-limit handling live in ONE place.
+goes through generate_content(), so provider choice, fallback, and rate-limit handling
+live in ONE place.
 
 Backends (set LLM_BACKEND in .env):
-  - "gemini" (default): Google Gemini. Free tier = 15 req/min → 429s handled with backoff.
-  - "ollama": a LOCAL model via Ollama (http://localhost:11434). No API key, no rate limits,
-    no cost — great for testing on a laptop (e.g. MacBook Air M4). Small models are weaker at
-    strict JSON, but the pipeline validates/rejects bad output, so it degrades gracefully.
+  - "gemini"  (default) : Google Gemini            (free tier: 15 req/min)
+  - "mistral"           : Mistral API              (OpenAI-compatible)
+  - "grok"              : xAI Grok                 (OpenAI-compatible)
+  - "ollama"            : LOCAL model via Ollama    (no key, no limits, no cost)
+  - "auto"              : try gemini -> mistral -> grok (whichever have keys), then
+                          fall through on rate limits. This stacks your free tiers so
+                          you rarely wait on any single provider's limit.
+  - "gemini,mistral"    : an explicit comma-separated fallback chain of your choosing.
+
+Only the providers whose API key is present are used. Ollama needs a running server.
 """
 
 import json as _json
@@ -17,106 +24,155 @@ import random
 import re
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Retry policy (Gemini only)
+# Retry policy (applies when the WHOLE chain is exhausted in one pass)
 MAX_RETRIES = 6
-BASE_DELAY = 2.0     # seconds; doubles each retry
-MAX_DELAY = 45.0     # cap any single backoff sleep
+BASE_DELAY = 2.0
+MAX_DELAY = 45.0
+
+DEFAULT_MODELS = {
+    "gemini": "gemini-3.1-flash-lite",
+    "mistral": "mistral-small-latest",
+    "grok": "grok-2-latest",
+    "ollama": "llama3.2",
+}
+
+OPENAI_COMPATIBLE = {
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
+    "grok": "https://api.x.ai/v1/chat/completions",
+}
 
 
-def _parse_retry_delay(msg: str) -> float | None:
-    """Pull the server-suggested wait out of a 429 message, if present."""
-    # e.g. "'retryDelay': '31s'"  or  "Please retry in 31.200815084s."
-    m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)\s*s", msg)
-    if not m:
-        m = re.search(r"retry in (\d+(?:\.\d+)?)\s*s", msg)
-    return float(m.group(1)) if m else None
+class _RateLimit(Exception):
+    """Raised when a provider signals a rate limit (429) — triggers fallback."""
 
 
-def _is_rate_limit(exc) -> bool:
-    status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    msg = str(exc)
-    return status == 429 or "RESOURCE_EXHAUSTED" in msg or "429" in msg
+def _looks_rate_limited(msg: str, status=None) -> bool:
+    return (status == 429) or "RESOURCE_EXHAUSTED" in msg or "429" in msg or "rate limit" in msg.lower()
 
 
-def _ollama_generate(prompt: str, model: str) -> str:
-    """
-    Call a local Ollama server. No rate limits, no cost. Requires Ollama running:
-        brew install ollama && ollama serve
-        ollama pull llama3.2        # or qwen2.5:3b, phi3.5, etc.
-    """
-    url = os.environ.get("OLLAMA_URL", "http://localhost:11434") + "/api/generate"
-    payload = _json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0},   # deterministic-ish for extraction/adjudication
-    }).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-            return data.get("response", "")
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"Ollama call failed ({e}). Is Ollama running? Try:\n"
-            f"  brew install ollama && ollama serve\n"
-            f"  ollama pull {model}"
-        )
+def _has_key(provider: str) -> bool:
+    if provider == "gemini":
+        return bool(os.environ.get("GEMINI_API_KEY"))
+    if provider == "mistral":
+        return bool(os.environ.get("MISTRAL_API_KEY"))
+    if provider == "grok":
+        return bool(os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"))
+    if provider == "ollama":
+        return True  # no key; server availability checked at call time
+    return False
 
 
-def _gemini_generate(prompt: str, model: str | None) -> str:
+# ─── PER-PROVIDER SINGLE-ATTEMPT CALLERS (raise _RateLimit on 429) ───────────────
+
+def _gemini_once(prompt: str, model: str) -> str:
     from google import genai
     from google.genai import errors
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    try:
+        return client.models.generate_content(model=model, contents=prompt).text
+    except errors.APIError as e:
+        if _looks_rate_limited(str(e), getattr(e, "code", None)):
+            raise _RateLimit(str(e))
+        raise
 
-    if model is None:
-        try:
-            from core.config import GEMINI_MODEL
-            model = GEMINI_MODEL
-        except Exception:
-            model = "gemini-3.1-flash-lite"
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-    client = genai.Client(api_key=api_key)
+def _openai_compatible_once(prompt: str, url: str, api_key: str, model: str) -> str:
+    body = _json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode(errors="ignore")
+        if _looks_rate_limited(msg, e.code):
+            raise _RateLimit(msg)
+        raise RuntimeError(f"{url} HTTP {e.code}: {msg[:200]}")
 
-    delay = BASE_DELAY
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.generate_content(model=model, contents=prompt)
-            return response.text
-        except errors.APIError as e:
-            # Only retry rate limits; surface everything else (404 bad model, 400, etc.) at once.
-            if not _is_rate_limit(e) or attempt == MAX_RETRIES - 1:
-                raise
-            wait = _parse_retry_delay(str(e))
-            wait = (wait if wait is not None else delay)
-            wait = min(wait, MAX_DELAY) + random.uniform(0, 1.0)  # jitter to de-sync parallel callers
-            print(f"[llm] 429 rate-limited; backing off {wait:.1f}s then retrying "
-                  f"(attempt {attempt + 1}/{MAX_RETRIES})", file=sys.stderr)
-            time.sleep(wait)
-            delay = min(delay * 2, MAX_DELAY)
 
-    raise RuntimeError("generate_content: exhausted retries without returning")
+def _ollama_once(prompt: str, model: str) -> str:
+    url = os.environ.get("OLLAMA_URL", "http://localhost:11434") + "/api/generate"
+    body = _json.dumps({"model": model, "prompt": prompt, "stream": False,
+                        "options": {"temperature": 0}}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            return _json.loads(resp.read().decode("utf-8")).get("response", "")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Ollama not reachable ({e}). Run: ollama serve && ollama pull {model}")
+
+
+def _call_provider(provider: str, prompt: str, model: str | None = None) -> str:
+    if provider == "gemini":
+        return _gemini_once(prompt, model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODELS["gemini"])
+    if provider in OPENAI_COMPATIBLE:
+        key = (os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")) if provider == "grok" \
+            else os.environ.get("MISTRAL_API_KEY")
+        env_model = os.environ.get(f"{provider.upper()}_MODEL")
+        return _openai_compatible_once(prompt, OPENAI_COMPATIBLE[provider], key,
+                                       model or env_model or DEFAULT_MODELS[provider])
+    if provider == "ollama":
+        return _ollama_once(prompt, model or os.environ.get("OLLAMA_MODEL") or DEFAULT_MODELS["ollama"])
+    raise ValueError(f"Unknown LLM provider: {provider}")
+
+
+def _resolve_chain(backend: str) -> list[str]:
+    if backend == "auto":
+        chain = [p for p in ("gemini", "mistral", "grok") if _has_key(p)]
+        return chain or ["ollama"]
+    if "," in backend:
+        return [p.strip() for p in backend.split(",") if p.strip()]
+    return [backend]
 
 
 def generate_content(prompt: str, model: str | None = None) -> str:
     """
-    Single entry point for LLM text generation. Routes to the configured backend.
+    Single entry point for LLM text generation. Routes to the configured backend(s),
+    falling through the chain on rate limits, and backing off only when the whole
+    chain is exhausted in a pass.
     """
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
     backend = os.environ.get("LLM_BACKEND", "gemini").strip().lower()
+    chain = _resolve_chain(backend)
+    # Only pass a caller-specified model when there's exactly one provider (models are
+    # provider-specific; in a chain each provider uses its own default/env model).
+    per_call_model = model if len(chain) == 1 else None
 
-    if backend == "ollama":
-        ollama_model = model or os.environ.get("OLLAMA_MODEL", "llama3.2")
-        return _ollama_generate(prompt, ollama_model)
+    delay = BASE_DELAY
+    last_err = None
+    for attempt in range(MAX_RETRIES):
+        for provider in chain:
+            if provider in ("gemini", "mistral", "grok") and not _has_key(provider):
+                continue
+            try:
+                return _call_provider(provider, prompt, per_call_model)
+            except _RateLimit as e:
+                last_err = e
+                print(f"[llm] {provider} rate-limited → trying next provider", file=sys.stderr)
+            except Exception as e:
+                last_err = e
+                print(f"[llm] {provider} failed ({str(e)[:80]}) → trying next provider", file=sys.stderr)
 
-    return _gemini_generate(prompt, model)
+        # Whole chain failed this pass → back off, then retry the chain.
+        wait = min(delay, MAX_DELAY) + random.uniform(0, 1.0)
+        print(f"[llm] all providers exhausted; backing off {wait:.1f}s "
+              f"(pass {attempt + 1}/{MAX_RETRIES})", file=sys.stderr)
+        time.sleep(wait)
+        delay = min(delay * 2, MAX_DELAY)
+
+    raise RuntimeError(f"generate_content: all providers failed. Last error: {last_err}")
