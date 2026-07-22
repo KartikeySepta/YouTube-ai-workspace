@@ -45,9 +45,9 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _call_gemini(prompt: str) -> str:
-    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    """Delegates to the centralized wrapper (per-task routing + fallback, core/llm.py)."""
     from core.llm import generate_content
-    return generate_content(prompt)
+    return generate_content(prompt, task="adjudication")
 
 
 def adjudicate_merge(claim_a: str, claim_b: str, context_a: str = "", context_b: str = "") -> tuple[bool, str]:

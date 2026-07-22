@@ -66,9 +66,9 @@ CHUNKS:
 
 
 def call_gemini(prompt: str) -> str:
-    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    """Delegates to the centralized wrapper (per-task routing + fallback, core/llm.py)."""
     from core.llm import generate_content
-    return generate_content(prompt)
+    return generate_content(prompt, task="extraction")
 
 
 def parse_and_validate_claims(raw_json_text: str, valid_chunk_ids: set[str], video_id: str, start_index: int = 0) -> tuple[list[Claim], list[dict]]:

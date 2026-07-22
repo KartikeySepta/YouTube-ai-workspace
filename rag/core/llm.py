@@ -138,20 +138,35 @@ def _resolve_chain(backend: str) -> list[str]:
     return [backend]
 
 
-def generate_content(prompt: str, model: str | None = None) -> str:
+def _task_backend(task: str | None) -> str:
+    """Per-task backend: {TASK}_BACKEND env if set, else the global LLM_BACKEND."""
+    if task:
+        v = os.environ.get(f"{task.upper()}_BACKEND")
+        if v:
+            return v.strip().lower()
+    return os.environ.get("LLM_BACKEND", "gemini").strip().lower()
+
+
+def generate_content(prompt: str, task: str | None = None, model: str | None = None) -> str:
     """
-    Single entry point for LLM text generation. Routes to the configured backend(s),
-    falling through the chain on rate limits, and backing off only when the whole
-    chain is exhausted in a pass.
+    Single entry point for LLM text generation, with PER-TASK routing.
+
+    `task` is one of: "extraction", "adjudication", "synthesis", "chat" (or None).
+    Each task can be pointed at its own backend via a {TASK}_BACKEND env var — e.g. route
+    high-volume EXTRACTION to a free local model while quality-critical CHAT uses the best
+    cloud tier. If a task has no override, it uses the global LLM_BACKEND. Within the chosen
+    backend, providers fall through on rate limits; we back off only when the whole chain
+    is exhausted in a pass.
     """
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
-    backend = os.environ.get("LLM_BACKEND", "gemini").strip().lower()
+    backend = _task_backend(task)
     chain = _resolve_chain(backend)
-    # Only pass a caller-specified model when there's exactly one provider (models are
+    # A per-task/explicit model only applies when the task points at ONE provider (models are
     # provider-specific; in a chain each provider uses its own default/env model).
-    per_call_model = model if len(chain) == 1 else None
+    per_call_model = model or (os.environ.get(f"{task.upper()}_MODEL") if task else None)
+    per_call_model = per_call_model if len(chain) == 1 else None
 
     delay = BASE_DELAY
     last_err = None
@@ -163,14 +178,14 @@ def generate_content(prompt: str, model: str | None = None) -> str:
                 return _call_provider(provider, prompt, per_call_model)
             except _RateLimit as e:
                 last_err = e
-                print(f"[llm] {provider} rate-limited → trying next provider", file=sys.stderr)
+                print(f"[llm:{task or 'default'}] {provider} rate-limited → next provider", file=sys.stderr)
             except Exception as e:
                 last_err = e
-                print(f"[llm] {provider} failed ({str(e)[:80]}) → trying next provider", file=sys.stderr)
+                print(f"[llm:{task or 'default'}] {provider} failed ({str(e)[:80]}) → next provider", file=sys.stderr)
 
         # Whole chain failed this pass → back off, then retry the chain.
         wait = min(delay, MAX_DELAY) + random.uniform(0, 1.0)
-        print(f"[llm] all providers exhausted; backing off {wait:.1f}s "
+        print(f"[llm:{task or 'default'}] all providers exhausted; backing off {wait:.1f}s "
               f"(pass {attempt + 1}/{MAX_RETRIES})", file=sys.stderr)
         time.sleep(wait)
         delay = min(delay * 2, MAX_DELAY)

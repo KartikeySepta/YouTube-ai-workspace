@@ -66,9 +66,9 @@ ANSWER:"""
 
 
 def call_gemini(prompt: str) -> str:
-    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    """Delegates to the centralized wrapper (per-task routing + fallback, core/llm.py)."""
     from core.llm import generate_content
-    return generate_content(prompt)
+    return generate_content(prompt, task="chat")
 
 
 def verify_citations(answer_text: str, source_map: dict) -> dict:
