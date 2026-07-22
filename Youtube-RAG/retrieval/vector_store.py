@@ -14,6 +14,7 @@ Uses Qdrant's local mode by default (a file on disk, no server needed) — good 
 solo/small-scale use. Switch to a server URL later only if you actually need it.
 """
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -55,7 +56,11 @@ def upsert_chunks(chunks: list[dict], client: QdrantClient = None):
     points = []
     for chunk, vector in zip(chunks, vectors):
         points.append(PointStruct(
-            id=abs(hash(chunk["chunk_id"])) % (10 ** 15),  # Qdrant needs int/uuid ids; deterministic from chunk_id
+            # Stable, deterministic point id from chunk_id. Python's built-in hash() is
+            # randomized per process (PYTHONHASHSEED), so using it here meant every re-index
+            # produced NEW ids for the same chunk — duplicating points instead of overwriting.
+            # sha1 is stable across runs, so re-indexing is now idempotent.
+            id=int(hashlib.sha1(chunk["chunk_id"].encode("utf-8")).hexdigest()[:15], 16),
             vector=vector,
             payload={
                 "chunk_id": chunk["chunk_id"],

@@ -9,6 +9,8 @@ from yt_dlp import YoutubeDL
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
 
 
 def extract_audio_and_metadata(video_url: str, output_name: str = "temp_stream") -> tuple[str, dict[str, Any]]:
@@ -76,9 +78,8 @@ def run_cloud_transcription(audio_path: str) -> str:
     )
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[prompt, uploaded_file],
-    )
+    model=GEMINI_MODEL,
+    contents=[prompt, uploaded_file],)
 
     print("🧹 Cleaning up remote cloud storage file...")
     client.files.delete(name=uploaded_file.name)

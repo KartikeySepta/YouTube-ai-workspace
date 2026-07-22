@@ -1,0 +1,80 @@
+[
+  {
+    "question": "How did the speaker go from being a gifted child with a bright future to a life of constant failure?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0000", "JiwZQNYlGQI_c0002", "JiwZQNYlGQI_c0003"]
+  },
+  {
+    "question": "What realization finally changed everything for her?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0011", "JiwZQNYlGQI_c0012"]
+  },
+  {
+    "question": "Why did she start her YouTube channel about this condition?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0005"]
+  },
+  {
+    "question": "What role did getting a diagnosis play in her story?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0001"]
+  },
+  {
+    "question": "Is this condition something a person simply grows out of once they become an adult?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0007"]
+  },
+  {
+    "question": "Does she frame the condition as purely a disadvantage, or does she describe upsides too?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0012"]
+  },
+  {
+    "question": "What message does she offer to people who don't have the condition themselves?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0016"]
+  },
+  {
+    "question": "How does she describe eventually becoming successful and reaching her potential?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0013", "JiwZQNYlGQI_c0014"]
+  },
+  {
+    "question": "Which broad areas of her adult life were disrupted before she understood her brain?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0002", "JiwZQNYlGQI_c0003"]
+  },
+  {
+    "question": "What is the core reassurance she wants people struggling with this to remember?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0011", "JiwZQNYlGQI_c0016"]
+  },
+  {
+    "question": "Do only children have ADHD, or can adults have it as well?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced_v2",
+    "expected_chunk_ids": ["mv-BME1SmTA_c0000"]
+  },
+  {
+    "question": "How common is ADHD among adults, and how many of them go undiagnosed?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced_v2",
+    "expected_chunk_ids": ["mv-BME1SmTA_c0000"]
+  },
+  {
+    "question": "What symptoms does the psychiatrist point to when identifying adult ADHD?",
+    "workspace_id": "rag_research",
+    "category": "description_sourced_v2",
+    "expected_chunk_ids": ["mv-BME1SmTA_c0002"]
+  }
+]

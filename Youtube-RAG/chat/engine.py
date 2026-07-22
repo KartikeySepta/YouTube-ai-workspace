@@ -22,12 +22,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import WORKSPACES_DIR, VECTOR_TOP_K, RERANK_KEEP_TOP
+from core.config import WORKSPACES_DIR, VECTOR_TOP_K, RERANK_KEEP_TOP, GEMINI_MODEL
 from retrieval.hybrid import hybrid_search
 from retrieval.reranker import rerank
 from retrieval.context import assemble_context
 
-CITATION_PATTERN = re.compile(r"\[Source (\d+)\]")
+# Match citation brackets that mention Source(s), including grouped forms the model
+# actually produces: "[Source 1]", "[Source 1, Source 2]", "[Source 1 and Source 3]".
+# An earlier version only matched a number immediately followed by "]", so grouped
+# citations slipped through UNVERIFIED — a hole in the whole anti-hallucination guarantee.
+CITATION_BRACKET_PATTERN = re.compile(r"\[([^\[\]]*?Source[^\[\]]*?)\]")
+SOURCE_NUMBER_PATTERN = re.compile(r"Source\s+(\d+)")
 
 
 def build_grounded_prompt(question: str, context_text: str, recent_history: list[dict] = None) -> str:
@@ -61,22 +66,9 @@ ANSWER:"""
 
 
 def call_gemini(prompt: str) -> str:
-    """Uses google-genai — the current SDK (google-generativeai is deprecated as of 2026)."""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    from google import genai
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    return response.text
+    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    from core.llm import generate_content
+    return generate_content(prompt)
 
 
 def verify_citations(answer_text: str, source_map: dict) -> dict:
@@ -85,8 +77,10 @@ def verify_citations(answer_text: str, source_map: dict) -> dict:
     source_map. Returns a report — this is what stops a hallucinated citation from
     silently reaching the user.
     """
-    cited_labels = set(CITATION_PATTERN.findall(answer_text))
-    cited_labels = {f"Source {n}" for n in cited_labels}
+    cited_labels = set()
+    for bracket_contents in CITATION_BRACKET_PATTERN.findall(answer_text):
+        for n in SOURCE_NUMBER_PATTERN.findall(bracket_contents):
+            cited_labels.add(f"Source {n}")
 
     valid_citations = cited_labels & source_map.keys()
     invalid_citations = cited_labels - source_map.keys()

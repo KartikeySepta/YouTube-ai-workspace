@@ -1,0 +1,22 @@
+# Override root-level *.json ignore for code-adjacent files we DO want in git
+!requirements.txt
+!evals/dataset.json
+!evals/dataset_chunkderived_v1.json
+
+# Generated workspace data (regenerable, potentially large)
+data/workspaces/
+data/raw/
+data/qdrant_db/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Diagnostic/temp scripts
+diagnose_reranker_truncation.py

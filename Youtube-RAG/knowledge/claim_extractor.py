@@ -1,162 +1,314 @@
 """
-STEP 10: GROUNDED CHAT
+STEP 3: CLAIM EXTRACTION
 
-Wires together everything built so far into the actual feature users interact with:
+Sends chunks to Gemini, asks for atomic claims (one clean idea per claim),
+each claim pointing back at the chunk_id it came from.
 
-  question -> hybrid retrieve (Steps 5-7) -> rerank (Step 8) -> assemble context (Step 9)
-    -> build grounded prompt -> call Gemini -> verify citations against source_map
-    -> return answer + verified sources
+THE MOST IMPORTANT RULE IN THIS FILE:
+Gemini can SUGGEST a chunk_id, but we NEVER trust it blindly. Every claim's
+evidence chunk_id is checked against the real chunk_ids we sent in. If Gemini
+references a chunk_id that doesn't exist (hallucinated, typo'd, or made up),
+that claim is thrown away — never silently kept.
 
-The two rules this file enforces, both inherited from the project's original spec:
-  1. Gemini is ONLY allowed to use the sources handed to it — never prior conversation
-     turns, never its own training knowledge, for factual claims about the videos.
-  2. Every citation in the response gets checked against the real source_map BEFORE
-     it's shown to the user. If Gemini cites "Source 7" but only 4 sources existed,
-     that's caught here, not silently trusted.
+This file also works without ever calling Gemini: run it directly to see the
+validation logic tested against a hand-built fake response with one bad claim
+mixed in with good ones, so you can see the rejection actually happen.
 """
 
 import json
 import os
-import re
 import sys
+from collections import OrderedDict, defaultdict
+from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import WORKSPACES_DIR, VECTOR_TOP_K, RERANK_KEEP_TOP
-from retrieval.hybrid import hybrid_search
-from retrieval.reranker import rerank
-from retrieval.context import assemble_context
+from core.models import TranscriptChunk, Claim, EvidenceRef
+from core.config import WORKSPACES_DIR, GEMINI_MODEL
 
-CITATION_PATTERN = re.compile(r"\[Source (\d+)\]")
+VALID_CLAIM_TYPES = {"recommendation", "opinion", "fact", "prediction", "warning"}
+VALID_STANCES = {"support", "oppose", "neutral", "mixed"}
 
 
-def build_grounded_prompt(question: str, context_text: str, recent_history: list[dict] = None) -> str:
+def build_claim_prompt(chunks_batch: list[TranscriptChunk]) -> str:
     """
-    Build the actual prompt sent to Gemini. Recent history is optional and limited —
-    per the spec, previous AI answers are NEVER treated as evidence, only as
-    conversational context for understanding follow-up questions.
+    Build the prompt sent to Gemini for one batch of chunks.
+    Batching a few chunks per call is cheaper/faster than one chunk at a time.
     """
-    history_block = ""
-    if recent_history:
-        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-4:]]
-        history_block = "Recent conversation (for context only, NOT evidence):\n" + "\n".join(history_lines) + "\n\n"
+    chunk_blocks = []
+    for c in chunks_batch:
+        chunk_blocks.append(f'chunk_id: "{c.chunk_id}"\ntext: "{c.text}"')
+    chunks_text = "\n\n".join(chunk_blocks)
 
-    return f"""You are answering questions using ONLY the sources below. These sources are excerpts
-from YouTube video transcripts, with approximate timestamps.
+    return f"""You are extracting atomic claims from video transcript chunks for a research tool.
 
 RULES:
-- Answer using ONLY the sources provided. Do not use outside knowledge about the topic.
-- Cite every factual claim with the source it came from, like [Source 1].
-- If sources disagree, say so explicitly rather than picking one silently.
-- If the sources don't contain enough information to answer, say so honestly —
-  do not guess or fill gaps with general knowledge.
-- Never invent a timestamp, quote, or detail not actually present in the sources.
+- Each claim must represent ONE independently checkable idea — not a vague summary.
+- Every claim MUST reference the exact chunk_id it came from, using ONLY the chunk_ids given below.
+- NEVER invent a chunk_id. NEVER invent evidence that isn't actually in the chunk text.
+- Do NOT include a confidence score — it will be ignored if present.
+- claim_type must be one of: recommendation, opinion, fact, prediction, warning
+- stance must be one of: support, oppose, neutral, mixed
 
-{history_block}SOURCES:
-{context_text}
+Return ONLY a JSON array, no markdown fences, no preamble. Each item:
+{{
+  "video_id": "...",
+  "claim": "...",
+  "claim_type": "...",
+  "stance": "...",
+  "evidence": [{{"chunk_id": "...", "evidence_text": "..."}}],
+  "topics": ["..."]
+}}
 
-QUESTION: {question}
-
-ANSWER:"""
+CHUNKS:
+{chunks_text}
+"""
 
 
 def call_gemini(prompt: str) -> str:
-    """Uses google-genai — the current SDK (google-generativeai is deprecated as of 2026)."""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    from google import genai
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    return response.text
+    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    from core.llm import generate_content
+    return generate_content(prompt)
 
 
-def verify_citations(answer_text: str, source_map: dict) -> dict:
+def parse_and_validate_claims(raw_json_text: str, valid_chunk_ids: set[str], video_id: str, start_index: int = 0) -> tuple[list[Claim], list[dict]]:
     """
-    Scan the answer for every [Source N] reference and check it against the real
-    source_map. Returns a report — this is what stops a hallucinated citation from
-    silently reaching the user.
+    Parse Gemini's JSON response and validate every claim's evidence.
+    Returns (accepted_claims, rejected_claims_with_reasons).
+
+    `start_index` is the GLOBAL claim counter — pass in how many claims have already
+    been accepted across all previous batches, so claim_ids stay unique across the
+    whole run instead of restarting at 0 in every batch.
+
+    THIS is the function that actually protects you from hallucinated evidence —
+    read it carefully, it's the safety net for the whole claims pipeline.
     """
-    cited_labels = set(CITATION_PATTERN.findall(answer_text))
-    cited_labels = {f"Source {n}" for n in cited_labels}
+    accepted = []
+    rejected = []
+    next_index = start_index
 
-    valid_citations = cited_labels & source_map.keys()
-    invalid_citations = cited_labels - source_map.keys()
+    # Strip markdown fences if Gemini added them despite instructions not to
+    cleaned = raw_json_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("```")[1]
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+    cleaned = cleaned.strip()
 
-    return {
-        "cited_count": len(cited_labels),
-        "valid_citations": sorted(valid_citations),
-        "invalid_citations": sorted(invalid_citations),
-        "all_valid": len(invalid_citations) == 0,
+    try:
+        raw_claims = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        rejected.append({"reason": f"invalid JSON from model: {e}", "raw": raw_json_text[:200]})
+        return accepted, rejected
+
+    for raw_claim in raw_claims:
+        claim_text = raw_claim.get("claim", "")
+        claim_type = raw_claim.get("claim_type", "")
+        stance = raw_claim.get("stance", "")
+        raw_evidence = raw_claim.get("evidence", [])
+
+        # --- Validation 1: claim_type and stance must be from the allowed set ---
+        if claim_type not in VALID_CLAIM_TYPES:
+            rejected.append({"reason": f"invalid claim_type '{claim_type}'", "claim": claim_text})
+            continue
+        if stance not in VALID_STANCES:
+            rejected.append({"reason": f"invalid stance '{stance}'", "claim": claim_text})
+            continue
+
+        # --- Validation 2: must have at least one evidence reference ---
+        if not raw_evidence:
+            rejected.append({"reason": "no evidence provided", "claim": claim_text})
+            continue
+
+        # --- Validation 3 (THE CRITICAL ONE): every chunk_id must actually exist ---
+        evidence_refs = []
+        claim_is_valid = True
+        for ev in raw_evidence:
+            chunk_id = ev.get("chunk_id", "")
+            if chunk_id not in valid_chunk_ids:
+                rejected.append({
+                    "reason": f"evidence references chunk_id '{chunk_id}' which DOES NOT EXIST — hallucinated or invalid",
+                    "claim": claim_text,
+                })
+                claim_is_valid = False
+                break
+            evidence_refs.append(EvidenceRef(
+                chunk_id=chunk_id,
+                evidence_text=ev.get("evidence_text", ""),
+            ))
+
+        if not claim_is_valid:
+            continue
+
+        # Passed all checks — accept it, using the GLOBAL counter for a unique id
+        accepted.append(Claim(
+            claim_id=f"{video_id}_claim{next_index:04d}",
+            video_id=video_id,
+            claim=claim_text,
+            claim_type=claim_type,
+            stance=stance,
+            evidence=evidence_refs,
+            topics=raw_claim.get("topics", []),
+        ))
+        next_index += 1
+
+    return accepted, rejected
+
+
+def extract_claims_for_chunks(
+    chunks: list[TranscriptChunk],
+    batch_size: int = 3,
+    cache: dict | None = None,
+) -> tuple[list[dict], list[dict], dict, dict]:
+    """
+    Extract claims for a corpus of chunks.
+
+    STEP 1 fix — provenance: chunks are grouped by video_id BEFORE batching, so no
+    batch ever straddles a video boundary. Previously batches of `batch_size` crossed
+    video boundaries (e.g. last McCabe chunk + first Bilkey chunk), and every claim in
+    a batch was tagged with batch[0].video_id — mislabeling the later video's claims.
+
+    STEP 2 — caching: claims are cached keyed by their SOURCE-CHUNK content_hash. Chunks
+    whose content_hash is already in `cache` are skipped entirely (no Gemini call), so
+    re-running on an unchanged corpus is a true no-op. claim_ids are derived
+    deterministically from the source chunk (`{chunk_id}_claim{j}`) so cached claims keep
+    stable ids across runs instead of shifting with an LLM-dependent global counter.
+
+    Returns: (claims_as_dicts_for_current_corpus, rejections, updated_cache, stats)
+    """
+    cache = dict(cache or {})
+    valid_chunk_ids = {c.chunk_id for c in chunks}
+    chid2hash = {c.chunk_id: c.content_hash for c in chunks}
+
+    # Only chunks whose content we haven't extracted before need a Gemini call.
+    to_process = [c for c in chunks if c.content_hash not in cache]
+
+    # Group the to-process chunks by video, preserving corpus order, then batch WITHIN a video.
+    by_video: "OrderedDict[str, list]" = OrderedDict()
+    for c in to_process:
+        by_video.setdefault(c.video_id, []).append(c)
+
+    all_rejections = []
+    gemini_calls = 0
+    new_by_hash: "defaultdict[str, list[Claim]]" = defaultdict(list)
+
+    for video_id, vchunks in by_video.items():
+        for i in range(0, len(vchunks), batch_size):
+            batch = vchunks[i:i + batch_size]
+            prompt = build_claim_prompt(batch)
+            raw_response = call_gemini(prompt)
+            gemini_calls += 1
+            # video_id is now guaranteed correct for every chunk in the batch.
+            claims, rejections = parse_and_validate_claims(raw_response, valid_chunk_ids, video_id, start_index=0)
+            all_rejections.extend(rejections)
+            for claim in claims:
+                src_chunk_id = claim.evidence[0].chunk_id
+                h = chid2hash.get(src_chunk_id)
+                if h is None:
+                    continue  # evidence chunk not in corpus map (shouldn't happen; already validated in-set)
+                new_by_hash[h].append(claim)
+
+    # Assign deterministic, cache-stable claim_ids per source chunk, then store in the cache.
+    for h, claim_list in new_by_hash.items():
+        for j, claim in enumerate(claim_list):
+            claim.claim_id = f"{claim.evidence[0].chunk_id}_claim{j}"
+        cache[h] = [asdict(c) for c in claim_list]
+
+    # Record chunks that produced ZERO claims too, so we don't re-call Gemini for them next run.
+    for c in to_process:
+        cache.setdefault(c.content_hash, [])
+
+    # Assemble the current corpus's claims in corpus order, entirely from the cache.
+    final_claims = []
+    for c in chunks:
+        final_claims.extend(cache.get(c.content_hash, []))
+
+    stats = {
+        "total_chunks": len(chunks),
+        "cached_chunks": len(chunks) - len(to_process),
+        "new_chunks": len(to_process),
+        "gemini_calls": gemini_calls,
+        "new_claims": sum(len(v) for v in new_by_hash.values()),
+        "total_claims": len(final_claims),
     }
+    return final_claims, all_rejections, cache, stats
 
 
-def ask(question: str, workspace_id: str, recent_history: list[dict] = None) -> dict:
-    """
-    The full grounded chat flow, end to end. Returns a dict with the answer,
-    the source map (for displaying real citations to the user), and a citation
-    verification report (for catching any hallucinated source references).
-    """
-    fused = hybrid_search(question, workspace_id=workspace_id, top_k=VECTOR_TOP_K)
-    reranked = rerank(question, fused, top_k=RERANK_KEEP_TOP)
-    context_text, source_map = assemble_context(reranked)
+def load_claim_cache(workspace_id: str) -> dict:
+    """Load the content_hash -> [claim dicts] cache for a workspace (empty if none yet)."""
+    cache_path = Path(WORKSPACES_DIR) / workspace_id / "claims_cache.json"
+    if cache_path.exists():
+        with open(cache_path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-    if not source_map:
-        return {
-            "answer": "I couldn't find any relevant information in this workspace to answer that.",
-            "source_map": {},
-            "citation_check": {"cited_count": 0, "valid_citations": [], "invalid_citations": [], "all_valid": True},
-        }
 
-    prompt = build_grounded_prompt(question, context_text, recent_history)
-    answer_text = call_gemini(prompt)
-    citation_check = verify_citations(answer_text, source_map)
+def save_claim_cache(cache: dict, workspace_id: str) -> str:
+    workspace_dir = Path(WORKSPACES_DIR) / workspace_id
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    out_path = workspace_dir / "claims_cache.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, indent=2)
+    return str(out_path)
 
-    return {
-        "answer": answer_text,
-        "source_map": source_map,
-        "citation_check": citation_check,
-    }
+
+def save_claims_to_workspace(claims: list, workspace_id: str) -> str:
+    """Write claims.json. Accepts either Claim dataclasses or already-dict claims."""
+    workspace_dir = Path(WORKSPACES_DIR) / workspace_id
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    out_path = workspace_dir / "claims.json"
+
+    payload = [c if isinstance(c, dict) else asdict(c) for c in claims]
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    return str(out_path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--test-citation-verifier":
-        # ============================================================
-        # NO NETWORK CALL — tests citation verification against a
-        # hand-built fake answer with one hallucinated citation mixed in.
-        # ============================================================
-        fake_source_map = {
-            "Source 1": {"chunk_id": "c1", "video_id": "vidA"},
-            "Source 2": {"chunk_id": "c2", "video_id": "vidA"},
-        }
-        fake_answer = "RAG works by chunking text [Source 1] and then embedding it [Source 2]. It also does X [Source 7]."
+    # ============================================================
+    # NO NETWORK CALL HERE — this proves the validator works using
+    # a hand-built fake Gemini response with ONE bad claim mixed in.
+    # ============================================================
 
-        result = verify_citations(fake_answer, fake_source_map)
-        print("Citation check result:")
-        print(json.dumps(result, indent=2))
-        print("\nEXPECTED: Source 1 and 2 valid, Source 7 invalid, all_valid=False")
-        assert result["valid_citations"] == ["Source 1", "Source 2"]
-        assert result["invalid_citations"] == ["Source 7"]
-        assert result["all_valid"] is False
-        print("\nALL ASSERTIONS PASSED")
+    fake_valid_chunk_ids = {"EP9zPS1jNwA_c0000", "EP9zPS1jNwA_c0001"}
 
-    else:
-        workspace_id = sys.argv[1] if len(sys.argv) > 1 else "rag_research"
-        question = sys.argv[2] if len(sys.argv) > 2 else "how does RAG work"
+    fake_gemini_response = json.dumps([
+        {
+            "video_id": "EP9zPS1jNwA",
+            "claim": "Obsidian plus Claude works well for a single person's personal knowledge base.",
+            "claim_type": "opinion",
+            "stance": "support",
+            "evidence": [{"chunk_id": "EP9zPS1jNwA_c0000", "evidence_text": "Obsidian works from a graph structure"}],
+            "topics": ["obsidian", "personal-knowledge-management"],
+        },
+        {
+            "video_id": "EP9zPS1jNwA",
+            "claim": "RAG uses embeddings to convert text into vector form.",
+            "claim_type": "fact",
+            "stance": "neutral",
+            "evidence": [{"chunk_id": "EP9zPS1jNwA_c0001", "evidence_text": "you are embedding it... converting this into a vector form"}],
+            "topics": ["rag", "embeddings"],
+        },
+        {
+            # THIS ONE IS BAD ON PURPOSE — references a chunk_id that was never provided
+            "video_id": "EP9zPS1jNwA",
+            "claim": "RAG systems always use PostgreSQL as the primary database.",
+            "claim_type": "fact",
+            "stance": "neutral",
+            "evidence": [{"chunk_id": "EP9zPS1jNwA_c9999", "evidence_text": "made up text that was never in any real chunk"}],
+            "topics": ["rag", "database"],
+        },
+    ])
 
-        result = ask(question, workspace_id=workspace_id)
+    claims, rejections = parse_and_validate_claims(fake_gemini_response, fake_valid_chunk_ids, "EP9zPS1jNwA", start_index=0)
 
-        print(f"Question: {question}\n")
-        print(f"Answer:\n{result['answer']}\n")
-        print(f"Citation check: {result['citation_check']}\n")
-        print("Source map:")
-        for label, info in result["source_map"].items():
-            print(f"  {label}: {info['video_title']} @ {info['timestamp']}")
+    print(f"ACCEPTED: {len(claims)} claim(s)\n")
+    for c in claims:
+        print(f"  [{c.claim_type}/{c.stance}] {c.claim}")
+        print(f"    evidence chunk: {c.evidence[0].chunk_id}\n")
+
+    print(f"REJECTED: {len(rejections)} claim(s)\n")
+    for r in rejections:
+        print(f"  REJECTED: {r['reason']}")
+        print(f"    claim was: \"{r['claim']}\"\n")

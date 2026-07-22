@@ -50,6 +50,30 @@ def _nearest_chapter(chapters: list[Chapter], seconds: float) -> Chapter | None:
     return best
 
 
+def _estimate_sentence_times(segment, sentence_word_counts, video_duration):
+    """
+    Estimate a (start, end) time for each sentence in ONE segment by word position,
+    proportionally across that segment's known time span. For a one-sentence segment
+    this just returns the segment's own [start, end].
+    """
+    effective_end = segment.end_seconds if segment.end_seconds is not None else video_duration
+    effective_start = segment.start_seconds
+    time_span = max(effective_end - effective_start, 0.0)
+    total_words = sum(sentence_word_counts)
+
+    times = []
+    words_before = 0
+    for wc in sentence_word_counts:
+        frac_start = words_before / total_words if total_words else 0.0
+        frac_end = (words_before + wc) / total_words if total_words else 1.0
+        times.append((
+            effective_start + frac_start * time_span,
+            effective_start + frac_end * time_span,
+        ))
+        words_before += wc
+    return times
+
+
 def chunk_video(
     video: Video,
     workspace_id: str,
@@ -58,88 +82,89 @@ def chunk_video(
 ) -> list[TranscriptChunk]:
     """
     Turn one Video's segments into TranscriptChunks.
-    Groups sentences up to ~target_words, carries `overlap_words` worth of trailing
-    sentences into the next chunk, and estimates timestamps by word position.
-    """
-    chunks = []
-    chunk_index = 0
 
+    Sentences are collected across ALL segments into one flat stream, THEN packed into
+    ~target_words chunks. This is deliberately segment-agnostic, because real transcripts
+    come in two broken extremes:
+      - one giant segment (a single 0:00 marker for the whole video), and
+      - one segment PER sentence (a timestamp on every line).
+    An earlier version reset chunking at every segment boundary, which produced one
+    enormous chunk in the first case and hundreds of one-sentence chunks in the second.
+    Packing a flat sentence stream produces consistent ~target_words chunks either way.
+
+    Each sentence keeps its own estimated (start, end), so a chunk that spans multiple
+    segments still gets an honest start (its first sentence) and end (its last sentence).
+    """
+    # 1) Flatten every segment into timed sentence units: {"text", "words", "start", "end"}.
+    units = []
     for segment in video.segments:
         sentences = split_into_sentences(segment.text)
         if not sentences:
             continue
+        word_counts = [len(s.split()) for s in sentences]
+        times = _estimate_sentence_times(segment, word_counts, video.duration_seconds)
+        for sentence, wc, (start, end) in zip(sentences, word_counts, times):
+            units.append({"text": sentence, "words": wc, "start": start, "end": end})
 
-        # Effective end time for this segment — fall back to video duration if unknown
-        # (this happens for the LAST segment, which has no "next segment" to bound it).
-        effective_end = segment.end_seconds if segment.end_seconds is not None else video.duration_seconds
-        effective_start = segment.start_seconds
-        time_span = effective_end - effective_start
+    # 2) Greedily pack sentence units into chunks up to target_words, with sentence overlap.
+    chunks = []
+    chunk_index = 0
 
-        # Pre-compute total word count in this segment, so we can turn
-        # "word position" into "fraction of the way through the segment".
-        sentence_word_counts = [len(s.split()) for s in sentences]
-        total_words = sum(sentence_word_counts)
+    def flush(group):
+        nonlocal chunk_index
+        if not group:
+            return
+        text = " ".join(u["text"] for u in group)
+        est_start = group[0]["start"]
+        est_end = max(u["end"] for u in group)
+        chapter = _nearest_chapter(video.chapters, est_start)
 
-        current_group: list[str] = []
-        current_word_count = 0
-        group_start_word_index = 0   # word index where the CURRENT chunk begins
-        words_seen_so_far = 0
+        chunks.append(TranscriptChunk(
+            chunk_id=f"{video.video_id}_c{chunk_index:04d}",
+            workspace_id=workspace_id,
+            video_id=video.video_id,
+            video_title=video.title,
+            channel=video.channel,
+            start_seconds=round(est_start, 1),
+            end_seconds=round(est_end, 1),
+            is_estimated=True,   # always True here — we never got real per-sentence timestamps
+            nearest_chapter_title=chapter.title if chapter else None,
+            text=text,
+            chunk_index=chunk_index,
+            content_hash=_content_hash(text),
+        ))
+        chunk_index += 1
 
-        def flush_chunk(group: list[str], start_word_index: int, end_word_index: int):
-            nonlocal chunk_index
-            if not group:
-                return
-            text = " ".join(group)
+    current = []
+    current_words = 0
+    added_since_flush = 0   # guards against emitting a trailing chunk that is ONLY overlap
 
-            # Estimate start/end time by word position, proportional across this segment's time span
-            frac_start = start_word_index / total_words if total_words else 0
-            frac_end = end_word_index / total_words if total_words else 1
-            est_start = effective_start + frac_start * time_span
-            est_end = effective_start + frac_end * time_span
+    for unit in units:
+        current.append(unit)
+        current_words += unit["words"]
+        added_since_flush += 1
 
-            chapter = _nearest_chapter(video.chapters, est_start)
+        if current_words >= target_words:
+            flush(current)
 
-            chunks.append(TranscriptChunk(
-                chunk_id=f"{video.video_id}_c{chunk_index:04d}",
-                workspace_id=workspace_id,
-                video_id=video.video_id,
-                video_title=video.title,
-                channel=video.channel,
-                start_seconds=round(est_start, 1),
-                end_seconds=round(est_end, 1),
-                is_estimated=True,   # always True here — we never got real per-sentence timestamps
-                nearest_chapter_title=chapter.title if chapter else None,
-                text=text,
-                chunk_index=chunk_index,
-                content_hash=_content_hash(text),
-            ))
-            chunk_index += 1
+            # Carry trailing sentences (up to overlap_words) into the next chunk for context.
+            # Never carry the ENTIRE just-flushed group — that would re-emit the same chunk and
+            # stall progress when a single sentence already exceeds target_words.
+            overlap = []
+            overlap_count = 0
+            for u in reversed(current[:-1]):
+                if overlap_count >= overlap_words:
+                    break
+                overlap.insert(0, u)
+                overlap_count += u["words"]
 
-        for i, sentence in enumerate(sentences):
-            current_group.append(sentence)
-            current_word_count += sentence_word_counts[i]
-            words_seen_so_far += sentence_word_counts[i]
+            current = overlap
+            current_words = overlap_count
+            added_since_flush = 0
 
-            if current_word_count >= target_words:
-                end_word_index = words_seen_so_far
-                flush_chunk(current_group, group_start_word_index, end_word_index)
-
-                # Build overlap: carry the last few sentences forward into the next chunk
-                overlap_group = []
-                overlap_count = 0
-                for s, wc in zip(reversed(current_group), reversed([sentence_word_counts[j] for j in range(i - len(current_group) + 1, i + 1)])):
-                    if overlap_count >= overlap_words:
-                        break
-                    overlap_group.insert(0, s)
-                    overlap_count += wc
-
-                current_group = overlap_group
-                current_word_count = overlap_count
-                group_start_word_index = end_word_index - overlap_count
-
-        # Flush whatever's left at the end of the segment
-        if current_group:
-            flush_chunk(current_group, group_start_word_index, words_seen_so_far)
+    # Flush the genuine leftover tail — but not if `current` is purely carried-over overlap.
+    if added_since_flush > 0:
+        flush(current)
 
     return chunks
 

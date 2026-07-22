@@ -1,0 +1,110 @@
+[
+  {
+    "question": "What are the three primary characteristics of ADHD?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0001", "JiwZQNYlGQI_c0008"]
+  },
+  {
+    "question": "What percentage of the global population does ADHD affect?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0006"]
+  },
+  {
+    "question": "How effective is stimulant medication for people with ADHD?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0010"]
+  },
+  {
+    "question": "Which neurotransmitters are involved in ADHD?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0009"]
+  },
+  {
+    "question": "How much more likely are people with ADHD to start their own business?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0012"]
+  },
+  {
+    "question": "What executive functions does ADHD impair?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0010"]
+  },
+  {
+    "question": "Why does the speaker say ADHD is a terrible name for the condition?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0009"]
+  },
+  {
+    "question": "What strategies besides medication can help with ADHD?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0010"]
+  },
+  {
+    "question": "What three things helped the speaker reach her potential?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0014"]
+  },
+  {
+    "question": "What analogy does ADHD coach Brett Thornhill use to describe attention?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0009"]
+  },
+  {
+    "question": "When was the speaker diagnosed with ADHD and what happened after she started medication?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0001", "JiwZQNYlGQI_c0002"]
+  },
+  {
+    "question": "Is ADHD caused by bad parenting or a lack of discipline?",
+    "workspace_id": "rag_research",
+    "category": "direct",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0007"]
+  },
+  {
+    "question": "Why do people with this condition tend to be late so often?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0011"]
+  },
+  {
+    "question": "What strengths or positive qualities do these brains tend to have?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0012"]
+  },
+  {
+    "question": "Is taking pills on its own enough to manage the disorder?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0010", "JiwZQNYlGQI_c0011"]
+  },
+  {
+    "question": "What does the story about a fish and climbing a tree mean?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0014"]
+  },
+  {
+    "question": "How is a genuine clinical diagnosis different from just occasionally getting distracted?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0008", "JiwZQNYlGQI_c0009"]
+  },
+  {
+    "question": "What encouraging message does the speaker give to people who feel like something is wrong with them?",
+    "workspace_id": "rag_research",
+    "category": "paraphrased",
+    "expected_chunk_ids": ["JiwZQNYlGQI_c0015", "JiwZQNYlGQI_c0016"]
+  }
+]

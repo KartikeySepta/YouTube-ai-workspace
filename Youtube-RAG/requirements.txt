@@ -1,0 +1,20 @@
+# Video RAG Tool — runtime dependencies
+# Install with: pip install -r requirements.txt
+
+# Embeddings + cross-encoder reranking (Steps 4, 8, 11)
+sentence-transformers>=3.0.0
+
+# Local on-disk vector store (Step 5)
+qdrant-client>=1.9.0
+
+# Keyword search for hybrid retrieval (Step 6)
+rank-bm25>=0.2.2
+
+# Gemini LLM calls — current SDK (Steps 3, 10, 12)
+google-genai>=0.3.0
+
+# .env loading for GEMINI_API_KEY
+python-dotenv>=1.0.0
+
+# Vector math used across embeddings/clustering
+numpy>=1.26.0

@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.models import ClusterSynthesis
-from core.config import WORKSPACES_DIR
+from core.config import WORKSPACES_DIR, GEMINI_MODEL, CROSS_VIDEO_ADJUDICATION_FLOOR, CROSS_SOURCE_THEME_FLOOR
 
 VALID_RELATIONSHIPS = {"single_source", "agreement", "partial_agreement", "contradiction", "different_context", "independent"}
 
@@ -85,22 +85,9 @@ CLAIMS:
 
 
 def call_gemini(prompt: str) -> str:
-    """Uses google-genai — the current SDK (google-generativeai is deprecated as of 2026)."""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    from google import genai
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    return response.text
+    """Delegates to the centralized wrapper with 429 retry/backoff (core/llm.py)."""
+    from core.llm import generate_content
+    return generate_content(prompt)
 
 
 def parse_relationship_response(raw_json_text: str, valid_claim_ids: set[str]) -> tuple[str, str]:
@@ -163,6 +150,71 @@ def synthesize_cluster(cluster_id: str, cluster_claims: list[dict]) -> ClusterSy
     )
 
 
+def build_cross_source_themes(claims: list[dict], floor: float = CROSS_SOURCE_THEME_FLOOR,
+                              top_k: int = 10) -> list[dict]:
+    """
+    STEP 4 — the "distinct synthesis category".
+
+    Cross-video claims are (correctly) NOT merged into one cluster when they differ in scope
+    (e.g. adult ADHD prevalence in Canada vs the US). But that relationship is the cross-creator
+    signal this tool exists to surface. Rather than transitively chaining every semantically-close
+    ADHD claim into one useless mega-theme, we surface the TOP-K strongest cross-video claim PAIRS
+    (different videos, cosine >= floor) and label each pair's relationship with one LLM call
+    (agreement / partial_agreement / contradiction / different_context / independent).
+
+    So "same finding, different population/region" shows up as an explicit, bounded, labeled
+    connection (typically different_context) instead of being lost at a 0% merge rate.
+    """
+    from knowledge.claim_clusterer import get_model, cosine_sim
+
+    def vid(c):
+        ev = c.get("evidence") or []
+        return ev[0]["chunk_id"].rsplit("_c", 1)[0] if ev else c.get("video_id")
+
+    n = len(claims)
+    if n < 2:
+        return []
+    model = get_model()
+    embs = model.encode([c["claim"] for c in claims], show_progress_bar=False)
+    vids = [vid(c) for c in claims]
+
+    # All cross-video pairs at/above the floor, strongest first.
+    pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            if vids[i] != vids[j]:
+                s = cosine_sim(embs[i], embs[j])
+                if s >= floor:
+                    pairs.append((s, i, j))
+    pairs.sort(reverse=True, key=lambda x: x[0])
+
+    themes = []
+    used = set()   # keep each claim in at most one theme, so the top-K stays diverse
+    for s, i, j in pairs:
+        if len(themes) >= top_k:
+            break
+        if i in used or j in used:
+            continue
+        member = [claims[i], claims[j]]
+        member_ids = [claims[i]["claim_id"], claims[j]["claim_id"]]
+        try:
+            raw = call_gemini(build_relationship_prompt(member))
+            relationship, note = parse_relationship_response(raw, set(member_ids))
+        except Exception as e:
+            relationship, note = "related", f"(relationship classification unavailable: {e})"
+        themes.append({
+            "theme_id": f"theme_{len(themes):04d}",
+            "member_claim_ids": member_ids,
+            "videos": sorted({vids[i], vids[j]}),
+            "cosine": round(s, 3),
+            "relationship": relationship,
+            "synthesis_note": note,
+        })
+        used.add(i)
+        used.add(j)
+    return themes
+
+
 def run_synthesis_for_workspace(workspace_id: str):
     claims_path = Path(WORKSPACES_DIR) / workspace_id / "claims.json"
     clusters_path = Path(WORKSPACES_DIR) / workspace_id / "clusters.json"
@@ -183,7 +235,14 @@ def run_synthesis_for_workspace(workspace_id: str):
     with open(out_path, "w") as f:
         json.dump([asdict(r) for r in results], f, indent=2)
 
-    return results
+    # STEP 4: the distinct-synthesis-category layer — cross-video related claims that were
+    # deliberately NOT merged still get surfaced (and labeled) here rather than lost.
+    themes = build_cross_source_themes(claims)
+    themes_path = Path(WORKSPACES_DIR) / workspace_id / "cross_source_themes.json"
+    with open(themes_path, "w") as f:
+        json.dump(themes, f, indent=2)
+
+    return results, themes
 
 
 if __name__ == "__main__":
@@ -227,14 +286,18 @@ if __name__ == "__main__":
         # Real run against a real workspace — the derived-stats part works today,
         # the Gemini relationship part only fires once you have 2+ videos.
         workspace_id = sys.argv[1] if len(sys.argv) > 1 else "rag_research"
-        results = run_synthesis_for_workspace(workspace_id)
+        results, themes = run_synthesis_for_workspace(workspace_id)
 
         single_source = [r for r in results if r.relationship == "single_source"]
         multi_source = [r for r in results if r.relationship != "single_source"]
 
         print(f"{len(results)} clusters synthesized")
         print(f"  {len(single_source)} single-source (only 1 video — nothing to compare yet)")
-        print(f"  {len(multi_source)} multi-source (real cross-video comparison happened)\n")
+        print(f"  {len(multi_source)} multi-source (real cross-video comparison happened)")
+        print(f"  {len(themes)} cross-source themes (related across videos, not merged)\n")
+
+        for t in themes:
+            print(f"[{t['theme_id']}] {t['relationship']} across {t['videos']} — {t['synthesis_note']}")
 
         for r in multi_source:
             print(f"[{r.cluster_id}] {r.relationship} — {r.synthesis_note}")
