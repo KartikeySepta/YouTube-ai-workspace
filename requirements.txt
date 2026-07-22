@@ -1,0 +1,28 @@
+# YouTube AI Workspace — all dependencies
+# Install with: pip install -r requirements.txt
+
+# Scraper: YouTube download + transcription
+yt-dlp>=2026.6.9
+faster-whisper>=1.2.1
+
+# RAG: embeddings + cross-encoder reranking
+sentence-transformers>=3.0.0
+
+# RAG: local vector store
+qdrant-client>=1.9.0
+
+# RAG: keyword search (hybrid retrieval)
+rank-bm25>=0.2.2
+
+# Shared: Gemini LLM (transcription + claim extraction + chat)
+google-genai>=0.3.0
+
+# Shared: .env loading
+python-dotenv>=1.0.0
+
+# Shared: vector math
+numpy>=1.26.0
+
+# Shared: web API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
