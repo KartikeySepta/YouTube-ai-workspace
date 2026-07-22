@@ -27,12 +27,13 @@ from retrieval.hybrid import hybrid_search
 from retrieval.reranker import rerank
 from retrieval.context import assemble_context
 
-# Match citation brackets that mention Source(s), including grouped forms the model
-# actually produces: "[Source 1]", "[Source 1, Source 2]", "[Source 1 and Source 3]".
-# An earlier version only matched a number immediately followed by "]", so grouped
-# citations slipped through UNVERIFIED — a hole in the whole anti-hallucination guarantee.
+# Match citation brackets that mention Source(s), including grouped/shorthand forms the
+# model actually produces: "[Source 1]", "[Source 1, 2, 4]", "[Source 1 and Source 3]".
+# Inside such a bracket we extract EVERY number — an earlier version matched only a digit
+# directly after the word "Source", so shorthand continuations like the 2 and 4 in
+# "[Source 1, 2, 4]" were silently dropped (counted as neither valid nor invalid).
 CITATION_BRACKET_PATTERN = re.compile(r"\[([^\[\]]*?Source[^\[\]]*?)\]")
-SOURCE_NUMBER_PATTERN = re.compile(r"Source\s+(\d+)")
+SOURCE_NUMBER_PATTERN = re.compile(r"\d+")
 
 
 def build_grounded_prompt(question: str, context_text: str, recent_history: list[dict] = None) -> str:
