@@ -50,7 +50,7 @@ def _call_gemini(prompt: str) -> str:
     return generate_content(prompt, task="adjudication")
 
 
-def adjudicate_merge(claim_a: str, claim_b: str, context_a: str = "", context_b: str = "") -> tuple[bool, str]:
+def adjudicate_merge(claim_a: str, claim_b: str, context_a: str = "", context_b: str = "") -> tuple[bool, str, bool]:
     """
     Ask the LLM whether two claims assert the SAME checkable thing and should merge.
 
@@ -60,8 +60,11 @@ def adjudicate_merge(claim_a: str, claim_b: str, context_a: str = "", context_b:
     stay separate. Optional surrounding chunk text is provided because scope often lives in
     the context, not the claim sentence itself.
 
-    Returns (should_merge, reason). On any error, defaults to (False, ...) — the conservative
-    choice, since a false merge silently corrupts cross-video agreement counts.
+    Returns (should_merge, reason, errored):
+      - errored=False → a REAL verdict from the model (merge True/False is trustworthy).
+      - errored=True  → we could NOT get a verdict (LLM/all-providers failure, or unparseable
+                        output). merge is forced False (conservative), but the caller MUST
+                        count this separately — it is NOT a genuine "these claims differ".
     """
     ctx_a = f'\nContext for A: "{context_a}"' if context_a else ""
     ctx_b = f'\nContext for B: "{context_b}"' if context_b else ""
@@ -86,16 +89,23 @@ Claim B: "{claim_b}"{ctx_b}
 
 Return ONLY JSON, no markdown fences: {{"merge": true or false, "reason": "one sentence"}}"""
 
+    # 1) The LLM call itself. A failure here is INFRA (rate limits / all providers exhausted),
+    #    not a judgment — surface it as errored, never as a genuine no-merge.
     try:
         raw = _call_gemini(prompt).strip()
+    except Exception as e:
+        return False, f"INFRA FAILURE (no verdict obtained): {e}", True
+
+    # 2) Parsing the model's reply. Unparseable = we still didn't get a real verdict.
+    try:
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
         parsed = json.loads(raw.strip())
-        return bool(parsed.get("merge", False)), str(parsed.get("reason", ""))
+        return bool(parsed.get("merge", False)), str(parsed.get("reason", "")), False
     except Exception as e:
-        return False, f"adjudication error (defaulting to no-merge): {e}"
+        return False, f"UNPARSEABLE model reply (no verdict): {e}", True
 
 
 def cluster_claims(
@@ -142,6 +152,7 @@ def cluster_claims(
         "within_adjudications": 0,
         "cross_adjudications": 0,
         "cross_merges": 0,
+        "adjudication_errors": 0,   # LLM/infra failures — NOT genuine no-merge verdicts
     }
 
     for i, emb in enumerate(embeddings):
@@ -164,21 +175,25 @@ def cluster_claims(
                     stats["within_auto_merges"] += 1
                 elif best_sim >= gray_low and adjudicate:
                     stats["within_adjudications"] += 1
-                    merge, _reason = adjudicate_merge(
+                    merge, _reason, errored = adjudicate_merge(
                         claims[i]["claim"], claims[rep]["claim"],
                         context_by_claim_id.get(claims[i]["claim_id"], ""),
                         context_by_claim_id.get(claims[rep]["claim_id"], ""),
                     )
+                    if errored:
+                        stats["adjudication_errors"] += 1   # infra failure, not a real verdict
                     should_merge = merge
             else:
                 # CROSS-VIDEO: never auto-merge; adjudicate everything at/above the floor.
                 if best_sim >= cross_floor and adjudicate:
                     stats["cross_adjudications"] += 1
-                    merge, _reason = adjudicate_merge(
+                    merge, _reason, errored = adjudicate_merge(
                         claims[i]["claim"], claims[rep]["claim"],
                         context_by_claim_id.get(claims[i]["claim_id"], ""),
                         context_by_claim_id.get(claims[rep]["claim_id"], ""),
                     )
+                    if errored:
+                        stats["adjudication_errors"] += 1   # infra failure, not a real verdict
                     should_merge = merge
                     if merge:
                         stats["cross_merges"] += 1

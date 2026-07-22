@@ -94,18 +94,27 @@ def upsert_chunks(chunks: list[dict], client: QdrantClient = None):
     return len(points)
 
 
-def delete_workspace(workspace_id: str, client: QdrantClient = None) -> None:
-    """Delete all vectors belonging to a workspace (used when deleting a chat)."""
+def delete_workspace(workspace_id: str, client: QdrantClient = None) -> int:
+    """
+    Delete all vectors belonging to a workspace (used when deleting a chat).
+
+    Only the "collection doesn't exist yet" case is swallowed (nothing to delete).
+    ANY other failure is raised — otherwise the caller would remove the folder and
+    report success while the vectors silently leak in Qdrant.
+
+    Returns the number of points that matched the workspace before deletion (0 if the
+    collection didn't exist), so the caller can confirm something was actually removed.
+    """
     client = client or get_client()
+    flt = Filter(must=[FieldCondition(key="workspace_id", match=MatchValue(value=workspace_id))])
     try:
-        client.delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=Filter(
-                must=[FieldCondition(key="workspace_id", match=MatchValue(value=workspace_id))]
-            ),
-        )
-    except Exception:
-        pass  # collection may not exist yet; nothing to delete
+        matched = client.count(collection_name=COLLECTION_NAME, count_filter=flt).count
+    except Exception as e:
+        if "not found" in str(e).lower() or "doesn't exist" in str(e).lower() or "does not exist" in str(e).lower():
+            return 0  # collection not created yet — nothing to delete
+        raise  # any other failure must surface, not be hidden
+    client.delete(collection_name=COLLECTION_NAME, points_selector=flt)
+    return matched
 
 
 def search(query: str, workspace_id: str, top_k: int = 10, client: QdrantClient = None) -> list[dict]:

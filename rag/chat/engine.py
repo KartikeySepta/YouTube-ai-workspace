@@ -150,6 +150,9 @@ def ask(question: str, workspace_id: str, recent_history: list[dict] = None, mod
             "answer": "I couldn't find any relevant information in this workspace to answer that.",
             "source_map": {},
             "citation_check": {"cited_count": 0, "valid_citations": [], "invalid_citations": [], "all_valid": True},
+            "mode": mode,
+            "verified": mode == "grounded",
+            "caveat": None,
         }
 
     if mode == "assist":
@@ -159,11 +162,24 @@ def ask(question: str, workspace_id: str, recent_history: list[dict] = None, mod
     answer_text = call_gemini(prompt)
     citation_check = verify_citations(answer_text, source_map)
 
+    # Anti-hallucination surfacing: grounded mode is verifiable (answer must come from
+    # sources); assist mode is NOT — it may use the model's own knowledge, so its [Source N]
+    # tags are the model's own attributions and are NOT a guarantee. Make that explicit to
+    # every caller (CLI + API) rather than letting an assist answer look verified.
+    verified = (mode == "grounded") and citation_check["all_valid"]
+    caveat = (
+        None if mode == "grounded"
+        else "assist mode — answer may include the model's own knowledge; [Source N] tags "
+             "are NOT verified against the videos."
+    )
+
     return {
         "answer": answer_text,
         "source_map": source_map,
         "citation_check": citation_check,
         "mode": mode,
+        "verified": verified,
+        "caveat": caveat,
     }
 
 

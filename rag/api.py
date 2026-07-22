@@ -54,6 +54,9 @@ class ChatResponse(BaseModel):
     sources: dict[str, Any]
     citations_valid: bool
     cited_count: int
+    mode: str
+    verified: bool          # True only in grounded mode with all citations valid
+    caveat: str | None = None   # set in assist mode: answer not verified against sources
 
 
 # ─── ENDPOINTS ─────────────────────────────────────────────────────────────────
@@ -171,6 +174,9 @@ def chat(req: ChatRequest):
         sources=result["source_map"],
         citations_valid=result["citation_check"]["all_valid"],
         cited_count=result["citation_check"]["cited_count"],
+        mode=result["mode"],
+        verified=result["verified"],
+        caveat=result.get("caveat"),
     )
 
 
@@ -224,8 +230,9 @@ def delete_workspace_endpoint(workspace_id: str):
         raise HTTPException(404, f"Workspace '{workspace_id}' not found")
     try:
         from retrieval.vector_store import delete_workspace
-        delete_workspace(workspace_id)
-    except Exception:
-        pass
+        removed = delete_workspace(workspace_id)
+    except Exception as e:
+        # Surface real failures rather than deleting the folder and leaking vectors.
+        raise HTTPException(500, f"Vector cleanup failed, workspace not deleted: {e}")
     shutil.rmtree(ws)
-    return {"status": "deleted", "workspace_id": workspace_id}
+    return {"status": "deleted", "workspace_id": workspace_id, "vectors_removed": removed}

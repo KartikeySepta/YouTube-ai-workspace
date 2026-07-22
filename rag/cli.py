@@ -214,13 +214,20 @@ def cmd_cluster(args):
         return
 
     claims, clusters, stats = run_clustering_for_workspace(args.workspace_id)
-    _sig_write(ws, "cluster", sig)
+    errors = stats.get("adjudication_errors", 0)
+    # Only cache (skip future re-runs) if the run was CLEAN. If adjudication hit infra
+    # failures, some merges were skipped for the wrong reason — don't freeze that result.
+    if errors == 0:
+        _sig_write(ws, "cluster", sig)
     multi = [c for c in clusters if c["size"] > 1]
     print(f"{len(claims)} claims -> {len(clusters)} clusters ({len(multi)} with 2+ members)")
     print(f"adjudication calls: within-video={stats['within_adjudications']}, "
           f"cross-video={stats['cross_adjudications']} "
           f"(total={stats['within_adjudications'] + stats['cross_adjudications']}); "
           f"cross-video merges kept={stats['cross_merges']}")
+    if errors:
+        print(f"⚠️  {errors} adjudication(s) FAILED (LLM/infra, not a real verdict) — those pairs "
+              f"were left un-merged and this run was NOT cached. Re-run to retry them.")
 
 
 def cmd_synthesize(args):
@@ -266,6 +273,11 @@ def cmd_chat(args):
     print(f"\n[{args.mode} mode] Answer:\n{result['answer']}\n")
     if args.mode == "grounded":
         print(f"Citation check: {result['citation_check']}")
+    else:
+        cc = result["citation_check"]
+        print(f"⚠️  {result['caveat']}")
+        print(f"   citations in answer: {cc['cited_count']} | match a real source: {sorted(cc['valid_citations'])} "
+              f"| NOT in sources: {sorted(cc['invalid_citations'])}")
 
     history.append({"role": "user", "content": args.question, "mode": args.mode})
     history.append({"role": "assistant", "content": result["answer"], "mode": args.mode})
@@ -316,8 +328,14 @@ def cmd_talk(args):
         result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
         print(f"\nAssistant: {result['answer']}\n")
 
-        if mode == "grounded" and not result["citation_check"]["all_valid"]:
-            print(f"[WARNING: unverified citations found: {result['citation_check']['invalid_citations']}]\n")
+        if mode == "grounded":
+            if not result["citation_check"]["all_valid"]:
+                print(f"[WARNING: unverified citations found: {result['citation_check']['invalid_citations']}]\n")
+        else:
+            cc = result["citation_check"]
+            print(f"[⚠️  {result['caveat']} "
+                  f"cited={cc['cited_count']}, real={sorted(cc['valid_citations'])}, "
+                  f"not-in-sources={sorted(cc['invalid_citations'])}]\n")
 
         history.append({"role": "user", "content": question, "mode": mode})
         history.append({"role": "assistant", "content": result["answer"], "mode": mode})
@@ -591,14 +609,17 @@ def cmd_delete(args):
         if confirm != "y":
             print("Cancelled.")
             return
-    # Remove vectors for this workspace, then the folder.
+    # Remove vectors for this workspace FIRST. If that genuinely fails, abort and surface
+    # it — don't delete the folder and report success while vectors leak in Qdrant.
     try:
         from retrieval.vector_store import delete_workspace
-        delete_workspace(args.workspace_id)
+        removed = delete_workspace(args.workspace_id)
     except Exception as e:
-        print(f"  (vector cleanup skipped: {e})")
+        print(f"❌ Vector cleanup failed: {e}\n   Folder NOT deleted (would orphan vectors). "
+              f"Fix the store and retry.")
+        return
     shutil.rmtree(ws)
-    print(f"✅ Deleted chat '{args.workspace_id}'.")
+    print(f"✅ Deleted chat '{args.workspace_id}' ({removed} vector(s) removed).")
 
 
 def build_parser():
