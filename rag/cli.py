@@ -234,12 +234,13 @@ def cmd_synthesize(args):
 
 
 def cmd_chat(args):
-    """Step 10: ask a single question, get a grounded, cited answer."""
+    """Ask a single question. --mode grounded (cite-only) or assist (build/apply)."""
     from chat.engine import ask
 
-    result = ask(args.question, workspace_id=args.workspace_id)
-    print(f"\nAnswer:\n{result['answer']}\n")
-    print(f"Citation check: {result['citation_check']}")
+    result = ask(args.question, workspace_id=args.workspace_id, mode=args.mode)
+    print(f"\n[{args.mode} mode] Answer:\n{result['answer']}\n")
+    if args.mode == "grounded":
+        print(f"Citation check: {result['citation_check']}")
 
 
 def cmd_talk(args):
@@ -255,7 +256,9 @@ def cmd_talk(args):
     """
     from chat.engine import ask
 
-    print(f"Chatting with workspace '{args.workspace_id}'. Type 'exit' or 'quit' to stop.\n")
+    mode = args.mode
+    print(f"Chatting with workspace '{args.workspace_id}' [{mode} mode].")
+    print("Commands: 'exit'/'quit' to stop | '/assist' to build/apply | '/grounded' to fact-only.\n")
     history = []
 
     while True:
@@ -268,13 +271,17 @@ def cmd_talk(args):
         if question.lower() in ("exit", "quit"):
             print("Exiting.")
             break
+        if question.lower() in ("/assist", "/grounded"):
+            mode = question.lower().lstrip("/")
+            print(f"[switched to {mode} mode]\n")
+            continue
         if not question:
             continue
 
-        result = ask(question, workspace_id=args.workspace_id, recent_history=history)
+        result = ask(question, workspace_id=args.workspace_id, recent_history=history, mode=mode)
         print(f"\nAssistant: {result['answer']}\n")
 
-        if not result["citation_check"]["all_valid"]:
+        if mode == "grounded" and not result["citation_check"]["all_valid"]:
             print(f"[WARNING: unverified citations found: {result['citation_check']['invalid_citations']}]\n")
 
         history.append({"role": "user", "content": question})
@@ -544,10 +551,14 @@ def build_parser():
     p_chat = subparsers.add_parser("chat", help="Ask a single grounded, cited question")
     p_chat.add_argument("workspace_id")
     p_chat.add_argument("question")
+    p_chat.add_argument("--mode", choices=["grounded", "assist"], default="grounded",
+                        help="grounded = cite-only (no hallucination); assist = build/apply using video knowledge + expertise")
     p_chat.set_defaults(func=cmd_chat)
 
     p_talk = subparsers.add_parser("talk", help="Start an interactive chat session (in-memory history)")
     p_talk.add_argument("workspace_id")
+    p_talk.add_argument("--mode", choices=["grounded", "assist"], default="grounded",
+                        help="starting mode; switch live with /assist or /grounded")
     p_talk.set_defaults(func=cmd_talk)
 
     p_eval = subparsers.add_parser("evaluate", help="Run the retrieval evaluation harness")

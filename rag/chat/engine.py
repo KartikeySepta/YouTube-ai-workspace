@@ -65,6 +65,42 @@ QUESTION: {question}
 ANSWER:"""
 
 
+def build_assist_prompt(question: str, context_text: str, recent_history: list[dict] = None) -> str:
+    """
+    ASSIST / BUILD mode. Unlike grounded mode, this lets the model APPLY the video
+    knowledge — plus its own expertise — to actually help the user DO something (e.g.
+    "build an MCP server based on these videos"). The videos are the foundation and
+    should be cited when used, but the model may fill gaps with correct general knowledge
+    to give complete, actionable help. This trades strict no-hallucination for usefulness,
+    so it's an explicit opt-in mode.
+    """
+    history_block = ""
+    if recent_history:
+        history_lines = [f"{turn['role']}: {turn['content']}" for turn in recent_history[-4:]]
+        history_block = "Recent conversation:\n" + "\n".join(history_lines) + "\n\n"
+
+    return f"""You are an expert assistant helping the user ACT on what a set of YouTube videos teach.
+The sources below are excerpts from those video transcripts.
+
+HOW TO ANSWER:
+- Treat the sources as the primary foundation. When you use something from them, cite it like [Source 1].
+- You MAY go beyond the sources and use your own expert knowledge to give a COMPLETE, actionable
+  answer (real steps, real code, real examples) — the user WANTS you to build/explain fully,
+  not just quote the transcript.
+- When you add information that is NOT from the sources, make it clearly your own contribution
+  (e.g. "Beyond what the video shows, a typical implementation is…"). Never fabricate a quote or
+  timestamp and attribute it to a source.
+- Stay on the topic the videos are about. If the user asks something entirely unrelated to the
+  videos' subject, say so.
+
+{history_block}SOURCES (foundation from the videos):
+{context_text}
+
+USER REQUEST: {question}
+
+ANSWER (grounded in the videos where possible, completed with your expertise where needed):"""
+
+
 def call_gemini(prompt: str) -> str:
     """Delegates to the centralized wrapper (per-task routing + fallback, core/llm.py)."""
     from core.llm import generate_content
@@ -93,11 +129,17 @@ def verify_citations(answer_text: str, source_map: dict) -> dict:
     }
 
 
-def ask(question: str, workspace_id: str, recent_history: list[dict] = None) -> dict:
+def ask(question: str, workspace_id: str, recent_history: list[dict] = None, mode: str = "grounded") -> dict:
     """
-    The full grounded chat flow, end to end. Returns a dict with the answer,
-    the source map (for displaying real citations to the user), and a citation
-    verification report (for catching any hallucinated source references).
+    The full chat flow, end to end. Returns the answer, the source map, and a citation
+    verification report.
+
+    mode:
+      "grounded" (default) — answer ONLY from the sources; refuse if not present. Zero
+                             hallucination; best for research/fact-checking.
+      "assist"             — use the sources as foundation + the model's own expertise to
+                             actually help the user DO the thing (build/apply). More useful,
+                             less strictly verifiable.
     """
     fused = hybrid_search(question, workspace_id=workspace_id, top_k=VECTOR_TOP_K)
     reranked = rerank(question, fused, top_k=RERANK_KEEP_TOP)
@@ -110,7 +152,10 @@ def ask(question: str, workspace_id: str, recent_history: list[dict] = None) -> 
             "citation_check": {"cited_count": 0, "valid_citations": [], "invalid_citations": [], "all_valid": True},
         }
 
-    prompt = build_grounded_prompt(question, context_text, recent_history)
+    if mode == "assist":
+        prompt = build_assist_prompt(question, context_text, recent_history)
+    else:
+        prompt = build_grounded_prompt(question, context_text, recent_history)
     answer_text = call_gemini(prompt)
     citation_check = verify_citations(answer_text, source_map)
 
@@ -118,6 +163,7 @@ def ask(question: str, workspace_id: str, recent_history: list[dict] = None) -> 
         "answer": answer_text,
         "source_map": source_map,
         "citation_check": citation_check,
+        "mode": mode,
     }
 
 
