@@ -1,24 +1,29 @@
 """
-Centralized Gemini call with 429 retry-and-backoff.
+Centralized LLM call with a swappable backend (Gemini or local Ollama) + 429 backoff.
 
-Every Gemini caller in the project (claim_extractor, engine, synthesizer, claim_clusterer)
-goes through here, so rate-limit handling lives in ONE place instead of four. The free tier
-for gemini-3.1-flash-lite allows only 15 requests/minute; a burst of extraction / adjudication
-/ synthesis calls trips that and previously crashed the pipeline with an uncaught 429
-(RESOURCE_EXHAUSTED). This retries with exponential backoff, honoring the server's suggested
-retryDelay when it provides one.
+Every LLM caller in the project (claim_extractor, engine, synthesizer, claim_clusterer)
+goes through here, so backend choice and rate-limit handling live in ONE place.
+
+Backends (set LLM_BACKEND in .env):
+  - "gemini" (default): Google Gemini. Free tier = 15 req/min → 429s handled with backoff.
+  - "ollama": a LOCAL model via Ollama (http://localhost:11434). No API key, no rate limits,
+    no cost — great for testing on a laptop (e.g. MacBook Air M4). Small models are weaker at
+    strict JSON, but the pipeline validates/rejects bad output, so it degrades gracefully.
 """
 
+import json as _json
 import os
 import random
 import re
 import sys
 import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Retry policy
+# Retry policy (Gemini only)
 MAX_RETRIES = 6
 BASE_DELAY = 2.0     # seconds; doubles each retry
 MAX_DELAY = 45.0     # cap any single backoff sleep
@@ -39,13 +44,33 @@ def _is_rate_limit(exc) -> bool:
     return status == 429 or "RESOURCE_EXHAUSTED" in msg or "429" in msg
 
 
-def generate_content(prompt: str, model: str | None = None) -> str:
+def _ollama_generate(prompt: str, model: str) -> str:
     """
-    Single entry point for a Gemini text generation, with 429 backoff.
-    Non-429 errors are raised immediately (no point retrying a bad request).
+    Call a local Ollama server. No rate limits, no cost. Requires Ollama running:
+        brew install ollama && ollama serve
+        ollama pull llama3.2        # or qwen2.5:3b, phi3.5, etc.
     """
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+    url = os.environ.get("OLLAMA_URL", "http://localhost:11434") + "/api/generate"
+    payload = _json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0},   # deterministic-ish for extraction/adjudication
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+            return data.get("response", "")
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Ollama call failed ({e}). Is Ollama running? Try:\n"
+            f"  brew install ollama && ollama serve\n"
+            f"  ollama pull {model}"
+        )
+
+
+def _gemini_generate(prompt: str, model: str | None) -> str:
     from google import genai
     from google.genai import errors
 
@@ -78,5 +103,20 @@ def generate_content(prompt: str, model: str | None = None) -> str:
             time.sleep(wait)
             delay = min(delay * 2, MAX_DELAY)
 
-    # Unreachable: loop either returns or raises on the last attempt.
     raise RuntimeError("generate_content: exhausted retries without returning")
+
+
+def generate_content(prompt: str, model: str | None = None) -> str:
+    """
+    Single entry point for LLM text generation. Routes to the configured backend.
+    """
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+
+    backend = os.environ.get("LLM_BACKEND", "gemini").strip().lower()
+
+    if backend == "ollama":
+        ollama_model = model or os.environ.get("OLLAMA_MODEL", "llama3.2")
+        return _ollama_generate(prompt, ollama_model)
+
+    return _gemini_generate(prompt, model)

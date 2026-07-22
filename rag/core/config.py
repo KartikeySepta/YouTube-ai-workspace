@@ -52,6 +52,11 @@ CROSS_VIDEO_ADJUDICATION_FLOOR = 0.75
 # into one giant blob.
 CROSS_SOURCE_THEME_FLOOR = 0.80
 
+# Claim extraction batching. Chunks per Gemini call — bigger batch = fewer calls (kinder to
+# the free-tier 15 req/min limit). Kept modest so the model doesn't drop claims from a huge
+# prompt. 5 chunks (~900 words) is a good balance.
+CLAIM_EXTRACTION_BATCH_SIZE = 5
+
 # Models
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
