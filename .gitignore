@@ -21,3 +21,6 @@ output/
 
 # macOS
 .DS_Store
+
+# Personal docs (local only)
+abhishek.md
