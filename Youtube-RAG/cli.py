@@ -312,6 +312,124 @@ def cmd_report(args):
           f"{len(emphasized)} emphasized-point groups")
 
 
+def cmd_add(args):
+    """One command: paste a YouTube URL → scrape → full pipeline (ingest through report)."""
+    import subprocess
+    import tempfile
+    import os
+
+    scraper = Path(__file__).resolve().parent.parent / "youtube.py"
+    if not scraper.exists():
+        print(f"ERROR: scraper not found at {scraper}")
+        return
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    tmp.close()
+
+    try:
+        print(f"📡 Scraping: {args.url}")
+        subprocess.run(
+            ["python3", str(scraper), args.url, "--engine", args.engine, "--output", tmp.name],
+            check=True,
+        )
+
+        print(f"\n⚙️ Running pipeline for workspace '{args.workspace_id}'...")
+        # Re-use the existing cmd functions by building Namespace objects
+        from argparse import Namespace
+
+        ns_ingest = Namespace(raw_path=tmp.name, workspace_id=args.workspace_id)
+        cmd_ingest(ns_ingest)
+
+        ns = Namespace(workspace_id=args.workspace_id)
+        print("\n📐 Indexing...")
+        cmd_index(ns)
+        print("\n🧠 Extracting claims...")
+        cmd_extract_claims(ns)
+        print("\n🔗 Clustering...")
+        cmd_cluster(ns)
+        print("\n🌐 Synthesizing...")
+        try:
+            cmd_synthesize(ns)
+        except Exception as e:
+            print(f"  ⚠️ Synthesis skipped (likely rate limit, will work on next run): {e}")
+        print("\n📄 Generating report...")
+        cmd_report(ns)
+
+        print(f"\n✅ Done! Your workspace '{args.workspace_id}' is ready.")
+        print(f"   → Read the brief: cat data/workspaces/{args.workspace_id}/report.md")
+        print(f"   → Chat with it:   python3 cli.py talk {args.workspace_id}")
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+
+
+def cmd_batch(args):
+    """Add multiple videos from a text file (one URL per line)."""
+    urls = [line.strip() for line in open(args.url_file)
+            if line.strip() and not line.strip().startswith('#')]
+
+    if not urls:
+        print("No URLs found in file.")
+        return
+
+    print(f"Found {len(urls)} video(s) to process.\n")
+    from argparse import Namespace
+
+    for i, url in enumerate(urls, 1):
+        print(f"\n{'='*60}")
+        print(f"[{i}/{len(urls)}] {url}")
+        print('='*60)
+        add_args = Namespace(url=url, workspace_id=args.workspace_id, engine=args.engine)
+        try:
+            cmd_add(add_args)
+        except Exception as e:
+            print(f"  ❌ Failed: {e} — skipping, continuing with next video.")
+
+    print(f"\n{'='*60}")
+    print(f"✅ Batch complete. {len(urls)} video(s) processed into '{args.workspace_id}'.")
+    print(f"   → python3 cli.py talk {args.workspace_id}")
+
+
+def cmd_status(args):
+    """Show a workspace summary: what's in it, how much, what's generated."""
+    from core.config import WORKSPACES_DIR
+    ws = Path(WORKSPACES_DIR) / args.workspace_id
+    if not ws.exists():
+        print(f"Workspace '{args.workspace_id}' does not exist.")
+        return
+
+    print(f"Workspace: {args.workspace_id}\n")
+    files = {
+        "videos": "videos.json",
+        "chunks": "chunks.json",
+        "claims": "claims.json",
+        "clusters": "clusters.json",
+        "themes": "cross_source_themes.json",
+    }
+    for label, fname in files.items():
+        p = ws / fname
+        if p.exists():
+            data = json.load(open(p))
+            print(f"  {label:10}: {len(data)} records")
+        else:
+            print(f"  {label:10}: ❌ not generated")
+
+    report = ws / "report.md"
+    print(f"  {'report':10}: {'✅ generated' if report.exists() else '❌ not yet'}")
+    cache = ws / "claims_cache.json"
+    if cache.exists():
+        c = json.load(open(cache))
+        print(f"  {'cache':10}: {len(c)} chunk hashes cached")
+
+    # Show video titles
+    videos_path = ws / "videos.json"
+    if videos_path.exists():
+        videos = json.load(open(videos_path))
+        print(f"\n  Videos ({len(videos)}):")
+        for v in videos:
+            print(f"    • {v.get('title', '?')[:60]} ({v.get('channel', '?')})")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Video RAG tool CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -352,6 +470,23 @@ def build_parser():
 
     p_eval = subparsers.add_parser("evaluate", help="Run the retrieval evaluation harness")
     p_eval.set_defaults(func=cmd_evaluate)
+
+    p_add = subparsers.add_parser("add", help="Add a YouTube video: scrape + full pipeline in one shot")
+    p_add.add_argument("url", help="YouTube video URL")
+    p_add.add_argument("workspace_id", help="Workspace name, e.g. fiverr_tips")
+    p_add.add_argument("--engine", choices=["cloud", "local"], default="cloud",
+                       help="Transcription engine (default: cloud/Gemini)")
+    p_add.set_defaults(func=cmd_add)
+
+    p_batch = subparsers.add_parser("batch", help="Add multiple videos from a URL list file")
+    p_batch.add_argument("url_file", help="Text file with one YouTube URL per line")
+    p_batch.add_argument("workspace_id", help="Workspace name")
+    p_batch.add_argument("--engine", choices=["cloud", "local"], default="cloud")
+    p_batch.set_defaults(func=cmd_batch)
+
+    p_status = subparsers.add_parser("status", help="Show workspace summary")
+    p_status.add_argument("workspace_id")
+    p_status.set_defaults(func=cmd_status)
 
     return parser
 
