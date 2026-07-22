@@ -46,6 +46,7 @@ class ChatRequest(BaseModel):
     workspace_id: str
     question: str
     history: list[dict] | None = None
+    mode: str = "grounded"   # "grounded" (cite-only) or "assist" (build/apply)
 
 
 class ChatResponse(BaseModel):
@@ -163,7 +164,7 @@ def chat(req: ChatRequest):
         raise HTTPException(404, f"Workspace '{req.workspace_id}' not found")
 
     from chat.engine import ask
-    result = ask(req.question, workspace_id=req.workspace_id, recent_history=req.history)
+    result = ask(req.question, workspace_id=req.workspace_id, recent_history=req.history, mode=req.mode)
 
     return ChatResponse(
         answer=result["answer"],
@@ -201,3 +202,30 @@ def get_claims(workspace_id: str):
     if not path.exists():
         raise HTTPException(404, "Claims not extracted yet.")
     return {"workspace_id": workspace_id, "claims": json.load(open(path))}
+
+
+@app.get("/messages/{workspace_id}")
+def get_messages(workspace_id: str):
+    """Return the persisted conversation for a chat (workspace)."""
+    from core.config import WORKSPACES_DIR
+    path = Path(WORKSPACES_DIR) / workspace_id / "messages.json"
+    if not path.exists():
+        return {"workspace_id": workspace_id, "messages": []}
+    return {"workspace_id": workspace_id, "messages": json.load(open(path))}
+
+
+@app.delete("/workspaces/{workspace_id}")
+def delete_workspace_endpoint(workspace_id: str):
+    """Delete a chat (workspace): its data folder + vectors."""
+    import shutil
+    from core.config import WORKSPACES_DIR
+    ws = Path(WORKSPACES_DIR) / workspace_id
+    if not ws.exists():
+        raise HTTPException(404, f"Workspace '{workspace_id}' not found")
+    try:
+        from retrieval.vector_store import delete_workspace
+        delete_workspace(workspace_id)
+    except Exception:
+        pass
+    shutil.rmtree(ws)
+    return {"status": "deleted", "workspace_id": workspace_id}

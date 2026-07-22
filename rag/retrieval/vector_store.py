@@ -94,6 +94,20 @@ def upsert_chunks(chunks: list[dict], client: QdrantClient = None):
     return len(points)
 
 
+def delete_workspace(workspace_id: str, client: QdrantClient = None) -> None:
+    """Delete all vectors belonging to a workspace (used when deleting a chat)."""
+    client = client or get_client()
+    try:
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=Filter(
+                must=[FieldCondition(key="workspace_id", match=MatchValue(value=workspace_id))]
+            ),
+        )
+    except Exception:
+        pass  # collection may not exist yet; nothing to delete
+
+
 def search(query: str, workspace_id: str, top_k: int = 10, client: QdrantClient = None) -> list[dict]:
     """
     Search chunks by meaning, STRICTLY scoped to one workspace_id.

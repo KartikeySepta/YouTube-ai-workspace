@@ -47,6 +47,28 @@ def _require_file(path: Path, hint: str) -> bool:
     return True
 
 
+def _messages_path(workspace_id: str) -> Path:
+    from core.config import WORKSPACES_DIR
+    return Path(WORKSPACES_DIR) / workspace_id / "messages.json"
+
+
+def _load_messages(workspace_id: str) -> list:
+    p = _messages_path(workspace_id)
+    if p.exists():
+        try:
+            return json.load(open(p))
+        except Exception:
+            return []
+    return []
+
+
+def _save_messages(workspace_id: str, messages: list) -> None:
+    p = _messages_path(workspace_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(messages, f, indent=2)
+
+
 def cmd_ingest(args):
     """
     Steps 1-2: parse output.json, chunk it, and MERGE into the workspace.
@@ -234,13 +256,20 @@ def cmd_synthesize(args):
 
 
 def cmd_chat(args):
-    """Ask a single question. --mode grounded (cite-only) or assist (build/apply)."""
+    """Ask a single question. --mode grounded (cite-only) or assist (build/apply).
+    Conversation is persisted to the workspace so a 'chat' is permanent + resumable."""
     from chat.engine import ask
 
-    result = ask(args.question, workspace_id=args.workspace_id, mode=args.mode)
+    history = _load_messages(args.workspace_id)
+    recent = [{"role": m["role"], "content": m["content"]} for m in history[-4:]]
+    result = ask(args.question, workspace_id=args.workspace_id, recent_history=recent, mode=args.mode)
     print(f"\n[{args.mode} mode] Answer:\n{result['answer']}\n")
     if args.mode == "grounded":
         print(f"Citation check: {result['citation_check']}")
+
+    history.append({"role": "user", "content": args.question, "mode": args.mode})
+    history.append({"role": "assistant", "content": result["answer"], "mode": args.mode})
+    _save_messages(args.workspace_id, history)
 
 
 def cmd_talk(args):
@@ -249,17 +278,17 @@ def cmd_talk(args):
     the length of this session (so follow-up questions make sense), and prints a
     warning if any answer's citations don't check out.
 
-    NOTE: history lives only in memory for this run — it is NOT saved to disk
-    between separate `talk` sessions yet. That's a real, known gap (messages.json
-    persistence hasn't been built) — flagging it honestly rather than pretending
-    this is full persistent chat history.
+    NOTE: conversation history is PERSISTED to messages.json in the workspace, so a
+    chat is permanent and resumes where you left off. Use --fresh to start over, or
+    '/clear' mid-session to wipe it.
     """
     from chat.engine import ask
 
     mode = args.mode
-    print(f"Chatting with workspace '{args.workspace_id}' [{mode} mode].")
-    print("Commands: 'exit'/'quit' to stop | '/assist' to build/apply | '/grounded' to fact-only.\n")
-    history = []
+    history = [] if getattr(args, "fresh", False) else _load_messages(args.workspace_id)
+    intro = (f"{len(history) // 2} prior message(s) loaded" if history else "new conversation")
+    print(f"Chatting with workspace '{args.workspace_id}' [{mode} mode] — {intro}.")
+    print("Commands: 'exit'/'quit' stop | '/assist' build mode | '/grounded' fact-only | '/clear' wipe.\n")
 
     while True:
         try:
@@ -275,17 +304,24 @@ def cmd_talk(args):
             mode = question.lower().lstrip("/")
             print(f"[switched to {mode} mode]\n")
             continue
+        if question.lower() == "/clear":
+            history = []
+            _save_messages(args.workspace_id, history)
+            print("[history cleared]\n")
+            continue
         if not question:
             continue
 
-        result = ask(question, workspace_id=args.workspace_id, recent_history=history, mode=mode)
+        recent = [{"role": m["role"], "content": m["content"]} for m in history[-4:]]
+        result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
         print(f"\nAssistant: {result['answer']}\n")
 
         if mode == "grounded" and not result["citation_check"]["all_valid"]:
             print(f"[WARNING: unverified citations found: {result['citation_check']['invalid_citations']}]\n")
 
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": result["answer"]})
+        history.append({"role": "user", "content": question, "mode": mode})
+        history.append({"role": "assistant", "content": result["answer"], "mode": mode})
+        _save_messages(args.workspace_id, history)   # persist after every turn
 
 
 def cmd_evaluate(args):
@@ -517,6 +553,54 @@ def cmd_status(args):
             print(f"    • {v.get('title', '?')[:60]} ({v.get('channel', '?')})")
 
 
+def cmd_list(args):
+    """List all chats (workspaces) with a one-line summary each."""
+    from core.config import WORKSPACES_DIR
+    ws_dir = Path(WORKSPACES_DIR)
+    dirs = sorted([d for d in ws_dir.iterdir() if d.is_dir()]) if ws_dir.exists() else []
+    if not dirs:
+        print("No chats yet. Create one:  python3 cli.py add <youtube_url> <chat_name>")
+        return
+    print(f"{len(dirs)} chat(s):\n")
+    for d in dirs:
+        def _n(f):
+            p = d / f
+            return len(json.load(open(p))) if p.exists() else 0
+        videos = _n("videos.json")
+        claims = _n("claims.json")
+        msgs = _n("messages.json") // 2
+        titles = ""
+        if (d / "videos.json").exists():
+            vs = json.load(open(d / "videos.json"))
+            titles = "; ".join(v.get("title", "?")[:40] for v in vs[:3])
+        print(f"  • {d.name}  —  {videos} video(s), {claims} claims, {msgs} chat msg(s)")
+        if titles:
+            print(f"      {titles}")
+
+
+def cmd_delete(args):
+    """Delete a chat (workspace): its data, vectors, and conversation history."""
+    from core.config import WORKSPACES_DIR
+    import shutil
+    ws = Path(WORKSPACES_DIR) / args.workspace_id
+    if not ws.exists():
+        print(f"Chat '{args.workspace_id}' does not exist.")
+        return
+    if not getattr(args, "yes", False):
+        confirm = input(f"Delete chat '{args.workspace_id}' and all its data? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("Cancelled.")
+            return
+    # Remove vectors for this workspace, then the folder.
+    try:
+        from retrieval.vector_store import delete_workspace
+        delete_workspace(args.workspace_id)
+    except Exception as e:
+        print(f"  (vector cleanup skipped: {e})")
+    shutil.rmtree(ws)
+    print(f"✅ Deleted chat '{args.workspace_id}'.")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Video RAG tool CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -555,11 +639,20 @@ def build_parser():
                         help="grounded = cite-only (no hallucination); assist = build/apply using video knowledge + expertise")
     p_chat.set_defaults(func=cmd_chat)
 
-    p_talk = subparsers.add_parser("talk", help="Start an interactive chat session (in-memory history)")
+    p_talk = subparsers.add_parser("talk", help="Start an interactive chat session (persistent history)")
     p_talk.add_argument("workspace_id")
     p_talk.add_argument("--mode", choices=["grounded", "assist"], default="grounded",
                         help="starting mode; switch live with /assist or /grounded")
+    p_talk.add_argument("--fresh", action="store_true", help="Start a new conversation (ignore saved history)")
     p_talk.set_defaults(func=cmd_talk)
+
+    p_list = subparsers.add_parser("list", help="List all chats (workspaces)")
+    p_list.set_defaults(func=cmd_list)
+
+    p_delete = subparsers.add_parser("delete", help="Delete a chat (workspace) and all its data")
+    p_delete.add_argument("workspace_id")
+    p_delete.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    p_delete.set_defaults(func=cmd_delete)
 
     p_eval = subparsers.add_parser("evaluate", help="Run the retrieval evaluation harness")
     p_eval.set_defaults(func=cmd_evaluate)
