@@ -40,7 +40,23 @@ def get_client(path: str = "data/qdrant_db"):
                 collection_name=COLLECTION_NAME,
                 vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
             )
+        # Close the local client cleanly at process exit. Without this, Qdrant's __del__
+        # runs during interpreter teardown (when sys.meta_path is already None) and prints a
+        # harmless-but-ugly "Exception ignored in __del__ ... ImportError" to the terminal.
+        import atexit
+        atexit.register(_close_client)
     return _client
+
+
+def _close_client():
+    global _client
+    try:
+        if _client is not None:
+            _client.close()
+    except Exception:
+        pass
+    finally:
+        _client = None
 
 
 def upsert_chunks(chunks: list[dict], client: QdrantClient = None):
