@@ -39,6 +39,55 @@ def c(text, *styles):
     return "".join(_CODES.get(s, "") for s in styles) + str(text) + _CODES["reset"]
 
 
+# ─── rich rendering (optional; graceful fallback to plain print if not installed) ───
+try:
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    _console = Console()
+    _RICH = True
+except Exception:
+    _console, _RICH = None, False
+
+import contextlib
+
+
+def _render_answer(text):
+    """Render the assistant answer as Markdown (headers/bold/code) if rich is available."""
+    if _RICH:
+        _console.print(Markdown(text))
+    else:
+        print(text)
+
+
+def _print_sources(source_map):
+    """Show a compact Sources panel: which real source each [Source N] maps to."""
+    if not source_map:
+        return
+    if _RICH:
+        body = "\n".join(
+            f"[bold]{label}[/bold]  {info.get('video_title', '?')}  [dim]@ {info.get('timestamp', '?')}[/dim]"
+            for label, info in source_map.items()
+        )
+        _console.print(Panel(body, title="Sources", border_style="cyan", expand=False))
+    else:
+        print("Sources:")
+        for label, info in source_map.items():
+            print(f"  {label}: {info.get('video_title', '?')} @ {info.get('timestamp', '?')}")
+
+
+def _thinking(msg="thinking…"):
+    """A spinner while the LLM works (rich); no-op context manager otherwise."""
+    if _RICH:
+        return _console.status(f"[cyan]{msg}[/cyan]", spinner="dots")
+    return contextlib.nullcontext()
+
+
+# Trivial greetings/acknowledgements — answered locally (friendly, no LLM call, no false refusal).
+_GREETINGS = {"hi", "hello", "hey", "yo", "hi bhai", "hey bhai", "hello bhai",
+              "hii", "hey there", "namaste", "hola"}
+
+
 def _signature(*parts) -> str:
     """Stable short hash of inputs — used to skip re-running expensive (Gemini) steps
     when their inputs (claims, thresholds) haven't changed since the last run."""
@@ -287,15 +336,20 @@ def cmd_chat(args):
 
     history = _load_messages(args.workspace_id)
     recent = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
-    result = ask(args.question, workspace_id=args.workspace_id, recent_history=recent, mode=args.mode)
-    print(f"\n[{args.mode} mode] Answer:\n{result['answer']}\n")
+    with _thinking():
+        result = ask(args.question, workspace_id=args.workspace_id, recent_history=recent, mode=args.mode)
+    print(c(f"\n[{args.mode} mode] Answer", "bold", "green"))
+    _render_answer(result["answer"])
+    _print_sources(result.get("source_map"))
     if args.mode == "grounded":
-        print(f"Citation check: {result['citation_check']}")
+        cc = result["citation_check"]
+        tag = c("all citations valid ✓", "green") if cc["all_valid"] else c(f"unverified: {cc['invalid_citations']}", "red")
+        print(c(f"citation check: cited={cc['cited_count']}  ", "gray") + tag)
     else:
         cc = result["citation_check"]
-        print(f"⚠️  {result['caveat']}")
-        print(f"   citations in answer: {cc['cited_count']} | match a real source: {sorted(cc['valid_citations'])} "
-              f"| NOT in sources: {sorted(cc['invalid_citations'])}")
+        print(c(f"⚠ {result['caveat']}", "yellow"))
+        print(c(f"  cited={cc['cited_count']}  real={sorted(cc['valid_citations'])}  "
+                f"not-in-sources={sorted(cc['invalid_citations'])}", "gray"))
 
     history.append({"role": "user", "content": args.question, "mode": args.mode})
     history.append({"role": "assistant", "content": result["answer"], "mode": args.mode})
@@ -344,18 +398,30 @@ def cmd_talk(args):
         if not question:
             continue
 
+        # Friendly local reply to bare greetings — no LLM call, no "sources don't mention hi".
+        if question.lower().strip("!.?") in _GREETINGS:
+            greet = (f"Hey! This chat is grounded in the '{args.workspace_id}' videos. "
+                     f"Ask me anything about them" + (" — or I'll help you build/apply it." if mode == "assist" else "."))
+            print("\n" + c("Assistant ", "bold", "green") + c("› ", "gray") + greet + "\n")
+            continue
+
         recent = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
-        result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
-        print("\n" + c("Assistant ", "bold", "green") + c("› ", "gray") + f"{result['answer']}\n")
+        with _thinking():
+            result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
+
+        print(c("\nAssistant ", "bold", "green") + c("›", "gray"))
+        _render_answer(result["answer"])
+        _print_sources(result.get("source_map"))
 
         if mode == "grounded":
             if not result["citation_check"]["all_valid"]:
-                print(c(f"⚠ unverified citations: {result['citation_check']['invalid_citations']}", "red") + "\n")
+                print(c(f"⚠ unverified citations: {result['citation_check']['invalid_citations']}", "red"))
         else:
             cc = result["citation_check"]
             print(c(f"⚠ {result['caveat']}", "yellow"))
             print(c(f"  cited={cc['cited_count']}  real={sorted(cc['valid_citations'])}  "
-                    f"not-in-sources={sorted(cc['invalid_citations'])}", "gray") + "\n")
+                    f"not-in-sources={sorted(cc['invalid_citations'])}", "gray"))
+        print()
 
         history.append({"role": "user", "content": question, "mode": mode})
         history.append({"role": "assistant", "content": result["answer"], "mode": mode})

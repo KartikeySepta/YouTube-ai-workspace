@@ -26,3 +26,6 @@ numpy>=1.26.0
 # Shared: web API
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+
+# CLI: rendered markdown + spinner + panels (graceful fallback if absent)
+rich>=13.0.0
