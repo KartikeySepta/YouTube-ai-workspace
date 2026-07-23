@@ -15,10 +15,28 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import core.quiet  # noqa: F401  — silences HF token warning + model-loading progress bars
+
+
+# ─── tiny ANSI color helper (no dependency; auto-disables when not a TTY or NO_COLOR set) ───
+_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+_CODES = {
+    "reset": "\033[0m", "bold": "\033[1m", "dim": "\033[2m",
+    "cyan": "\033[36m", "green": "\033[32m", "yellow": "\033[33m",
+    "blue": "\033[34m", "magenta": "\033[35m", "red": "\033[31m", "gray": "\033[90m",
+}
+
+
+def c(text, *styles):
+    """Wrap text in ANSI styles, e.g. c('hi', 'bold', 'cyan'). No-ops without a TTY."""
+    if not _COLOR or not styles:
+        return text
+    return "".join(_CODES.get(s, "") for s in styles) + str(text) + _CODES["reset"]
 
 
 def _signature(*parts) -> str:
@@ -299,43 +317,45 @@ def cmd_talk(args):
     mode = args.mode
     history = [] if getattr(args, "fresh", False) else _load_messages(args.workspace_id)
     intro = (f"{len(history) // 2} prior message(s) loaded" if history else "new conversation")
-    print(f"Chatting with workspace '{args.workspace_id}' [{mode} mode] — {intro}.")
-    print("Commands: 'exit'/'quit' stop | '/assist' build mode | '/grounded' fact-only | '/clear' wipe.\n")
+    print(c(f"\n● Chat: {args.workspace_id}", "bold", "cyan") + c(f"  [{mode} mode] — {intro}", "gray"))
+    print(c("  ", "gray") + c("exit", "yellow") + c(" · ", "gray") + c("/assist", "yellow")
+          + c(" build · ", "gray") + c("/grounded", "yellow") + c(" fact-only · ", "gray")
+          + c("/clear", "yellow") + c(" wipe", "gray") + "\n")
 
     while True:
         try:
-            question = input("You: ").strip()
+            question = input(c("You ", "bold", "blue") + c("› ", "gray")).strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting.")
+            print(c("\nExiting.", "gray"))
             break
 
         if question.lower() in ("exit", "quit"):
-            print("Exiting.")
+            print(c("Exiting.", "gray"))
             break
         if question.lower() in ("/assist", "/grounded"):
             mode = question.lower().lstrip("/")
-            print(f"[switched to {mode} mode]\n")
+            print(c(f"[switched to {mode} mode]\n", "magenta"))
             continue
         if question.lower() == "/clear":
             history = []
             _save_messages(args.workspace_id, history)
-            print("[history cleared]\n")
+            print(c("[history cleared]\n", "magenta"))
             continue
         if not question:
             continue
 
         recent = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
         result = ask(question, workspace_id=args.workspace_id, recent_history=recent, mode=mode)
-        print(f"\nAssistant: {result['answer']}\n")
+        print("\n" + c("Assistant ", "bold", "green") + c("› ", "gray") + f"{result['answer']}\n")
 
         if mode == "grounded":
             if not result["citation_check"]["all_valid"]:
-                print(f"[WARNING: unverified citations found: {result['citation_check']['invalid_citations']}]\n")
+                print(c(f"⚠ unverified citations: {result['citation_check']['invalid_citations']}", "red") + "\n")
         else:
             cc = result["citation_check"]
-            print(f"[⚠️  {result['caveat']} "
-                  f"cited={cc['cited_count']}, real={sorted(cc['valid_citations'])}, "
-                  f"not-in-sources={sorted(cc['invalid_citations'])}]\n")
+            print(c(f"⚠ {result['caveat']}", "yellow"))
+            print(c(f"  cited={cc['cited_count']}  real={sorted(cc['valid_citations'])}  "
+                    f"not-in-sources={sorted(cc['invalid_citations'])}", "gray") + "\n")
 
         history.append({"role": "user", "content": question, "mode": mode})
         history.append({"role": "assistant", "content": result["answer"], "mode": mode})
@@ -579,7 +599,7 @@ def cmd_list(args):
     if not dirs:
         print("No chats yet. Create one:  python3 cli.py add <youtube_url> <chat_name>")
         return
-    print(f"{len(dirs)} chat(s):\n")
+    print(c(f"{len(dirs)} chat(s):", "bold") + "\n")
     for d in dirs:
         def _n(f):
             p = d / f
@@ -591,9 +611,10 @@ def cmd_list(args):
         if (d / "videos.json").exists():
             vs = json.load(open(d / "videos.json"))
             titles = "; ".join(v.get("title", "?")[:40] for v in vs[:3])
-        print(f"  • {d.name}  —  {videos} video(s), {claims} claims, {msgs} chat msg(s)")
+        print("  " + c("●", "green") + " " + c(d.name, "bold", "cyan")
+              + c(f"   {videos} video(s) · {claims} claims · {msgs} chat msg(s)", "gray"))
         if titles:
-            print(f"      {titles}")
+            print(c(f"      {titles}", "dim"))
 
 
 def cmd_delete(args):
