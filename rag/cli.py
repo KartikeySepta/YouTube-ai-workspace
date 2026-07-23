@@ -625,7 +625,7 @@ def cmd_status(args):
         print(f"Workspace '{args.workspace_id}' does not exist.")
         return
 
-    print(f"Workspace: {args.workspace_id}\n")
+    print(c(f"Workspace: {args.workspace_id}", "bold", "cyan") + "\n")
     files = {
         "videos": "videos.json",
         "chunks": "chunks.json",
@@ -637,16 +637,16 @@ def cmd_status(args):
         p = ws / fname
         if p.exists():
             data = json.load(open(p))
-            print(f"  {label:10}: {len(data)} records")
+            print(f"  {label:10}: " + c(f"{len(data)} records", "green"))
         else:
-            print(f"  {label:10}: ❌ not generated")
+            print(f"  {label:10}: " + c("not generated", "gray"))
 
     report = ws / "report.md"
-    print(f"  {'report':10}: {'✅ generated' if report.exists() else '❌ not yet'}")
+    print(f"  {'report':10}: " + (c("generated ✓", "green") if report.exists() else c("not yet", "gray")))
     cache = ws / "claims_cache.json"
     if cache.exists():
-        c = json.load(open(cache))
-        print(f"  {'cache':10}: {len(c)} chunk hashes cached")
+        cache_data = json.load(open(cache))
+        print(f"  {'cache':10}: " + c(f"{len(cache_data)} chunk hashes cached", "gray"))
 
     # Show video titles
     videos_path = ws / "videos.json"
@@ -821,4 +821,18 @@ if __name__ == "__main__":
     else:
         parser = build_parser()
         args = parser.parse_args()
-        args.func(args)
+        try:
+            args.func(args)
+        except KeyboardInterrupt:
+            print(c("\nInterrupted.", "gray"))
+        except Exception as e:
+            msg = str(e)
+            if "already accessed by another instance" in msg:
+                print(c("\n⚠ This workspace is open in another session (a running `talk` or `chat`). "
+                        "Close it first — only one session can use a workspace at a time.", "yellow"))
+            elif "GEMINI_API_KEY" in msg or "all providers failed" in msg:
+                print(c(f"\n⚠ LLM unavailable: {msg}\n   Check your .env keys, or set LLM_BACKEND=ollama "
+                        f"for a local model.", "yellow"))
+            else:
+                print(c(f"\n✖ {type(e).__name__}: {msg}", "red"))
+            sys.exit(1)
